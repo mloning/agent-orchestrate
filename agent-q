@@ -137,17 +137,29 @@ handle_action() {
     fi
 }
 
+render_queue() {
+    if [[ ! -s "$QUEUE_FILE" ]]; then
+        return
+    fi
+    jq -s -r '
+    def priority:
+      if .status == "CRASHED" then 1
+      elif .status == "STALLED" then 2
+      elif .status == "WAITING_APPROVAL" then 3
+      elif .status == "THINKING" then 4
+      elif .status == "RUNNING" then 5
+      else 6 end;
+    sort_by(priority) | .[] | "[\(.status)] \(.session_target) | \(.message)"
+    ' "$QUEUE_FILE"
+}
+
 ui() {
     if ! command -v fzf &>/dev/null || ! command -v jq &>/dev/null; then
         echo "Error: fzf and jq are required."
         exit 1
     fi
 
-    if [[ ! -s "$QUEUE_FILE" ]]; then
-        echo "Agent queue is empty."
-        sleep 2
-        exit 0
-    fi
+
     
     export QUEUE_FILE
     export LOCK_FILE
@@ -155,14 +167,14 @@ ui() {
 
     local fzf_cmd="fzf \
         --prompt='Agent Queue > ' \
-        --bind 'enter:execute($SCRIPT_PATH handle switch {})+abort' \
-        --bind 'y:execute($SCRIPT_PATH handle yes {})+abort' \
-        --bind 'n:execute($SCRIPT_PATH handle no {})+abort' \
-        --bind 'd:execute($SCRIPT_PATH handle delete {})+reload(jq -r \"\\\"[\\\(.status)] \\\(.session_target) | \\\(.message)\\\"\" $QUEUE_FILE)' \
+        --bind 'enter:execute($SCRIPT_PATH handle switch {})' \
+        --bind 'y:execute($SCRIPT_PATH handle yes {})+reload($SCRIPT_PATH render)' \
+        --bind 'n:execute($SCRIPT_PATH handle no {})+reload($SCRIPT_PATH render)' \
+        --bind 'd:execute($SCRIPT_PATH handle delete {})+reload($SCRIPT_PATH render)' \
         --preview 'tmux capture-pane -p -t {2} 2>/dev/null | tail -n 20' \
         --preview-window=right:60%"
 
-    jq -r '"[\(.status)] \(.session_target) | \(.message)"' "$QUEUE_FILE" | eval "$fzf_cmd"
+    render_queue | eval "$fzf_cmd"
 }
 
 popup() {
@@ -181,6 +193,9 @@ case "$1" in
         ;;
     ui)
         ui
+        ;;
+    render)
+        render_queue
         ;;
     popup)
         popup

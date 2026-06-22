@@ -8,5 +8,5 @@ else
     AGENT_Q="$DIR/../../agent-q"
 fi
 
-"$AGENT_Q" rm "$target"
+"$AGENT_Q" push "$target" "agy" "RUNNING" "Executing tasks..."
 echo '{}'

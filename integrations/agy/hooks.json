@@ -1,6 +1,12 @@
 {
   "agent-q-integration": {
     "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "/Users/mloning/Documents/Software/agent-orchestrate/integrations/agy/agent-q-invocation.sh"
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "run_command|write_to_file|replace_file_content|multi_replace_file_content",
