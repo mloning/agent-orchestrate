@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+
+QUEUE_FILE="${HOME}/.agent_queue.jsonl"
+LOCK_DIR="${HOME}/.agent_queue.lockdir"
+
+init_queue() {
+    if [[ ! -f "$QUEUE_FILE" ]]; then
+        touch "$QUEUE_FILE"
+    fi
+}
+
+acquire_lock() {
+    local retries=0
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        sleep 0.1
+        ((retries++))
+        if (( retries > 50 )); then
+            echo "Error: Could not acquire lock after 5s." >&2
+            exit 1
+        fi
+    done
+}
+
+release_lock() {
+    rmdir "$LOCK_DIR" 2>/dev/null
+}
+
+push_state() {
+    local target="$1"
+    local agent_type="$2"
+    local status="$3"
+    local message="$4"
+    local updated_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    if [[ -z "$target" || -z "$agent_type" || -z "$status" ]]; then
+        echo "Usage: agent-q push <target> <agent_type> <status> [message]"
+        exit 1
+    fi
+
+    local new_entry=$(jq -n -c \
+        --arg st "$target" \
+        --arg at "$agent_type" \
+        --arg stat "$status" \
+        --arg msg "$message" \
+        --arg time "$updated_at" \
+        '{session_target: $st, agent_type: $at, status: $stat, message: $msg, updated_at: $time}')
+
+    acquire_lock
+    if [[ -s "$QUEUE_FILE" ]]; then
+        local temp_file=$(mktemp)
+        jq -c --arg st "$target" 'select(.session_target != $st)' "$QUEUE_FILE" > "$temp_file" 2>/dev/null || true
+        echo "$new_entry" >> "$temp_file"
+        mv "$temp_file" "$QUEUE_FILE"
+    else
+        echo "$new_entry" > "$QUEUE_FILE"
+    fi
+    release_lock
+}
+
+remove_state() {
+    local target="$1"
+    acquire_lock
+    if [[ -s "$QUEUE_FILE" ]]; then
+        local temp_file=$(mktemp)
+        jq -c --arg st "$target" 'select(.session_target != $st)' "$QUEUE_FILE" > "$temp_file" 2>/dev/null || true
+        mv "$temp_file" "$QUEUE_FILE"
+    fi
+    release_lock
+}
+
+daemon() {
+    echo "Starting agent-qd watchdog daemon..."
+    while true; do
+        acquire_lock
+        if [[ -s "$QUEUE_FILE" ]]; then
+            local temp_file=$(mktemp)
+            local current_time=$(date +%s)
+            
+            while IFS= read -r line; do
+                local target=$(echo "$line" | jq -r '.session_target')
+                local status=$(echo "$line" | jq -r '.status')
+                local updated_at=$(echo "$line" | jq -r '.updated_at')
+                
+                if [[ "$status" != "CRASHED" && "$status" != "STALLED" ]]; then
+                    local cmd=$(tmux display-message -p -t "$target" '#{pane_current_command}' 2>/dev/null)
+                    
+                    if [[ $? -ne 0 ]]; then
+                        line=$(echo "$line" | jq -c '.status = "CRASHED" | .message = "Pane destroyed"')
+                    elif [[ "$cmd" == "zsh" || "$cmd" == "bash" || "$cmd" == "fish" ]]; then
+                        line=$(echo "$line" | jq -c '.status = "CRASHED" | .message = "Exited to shell"')
+                    else
+                        local target_os=$(uname -s)
+                        local updated_sec
+                        if [[ "$target_os" == "Darwin" ]]; then
+                            updated_sec=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$updated_at" "+%s" 2>/dev/null)
+                        else
+                            updated_sec=$(date -d "$updated_at" "+%s" 2>/dev/null)
+                        fi
+                        
+                        if [[ -n "$updated_sec" ]]; then
+                            local diff=$((current_time - updated_sec))
+                            if (( diff > 600 )); then
+                                line=$(echo "$line" | jq -c '.status = "STALLED" | .message = "No updates for 10m"')
+                            fi
+                        fi
+                    fi
+                fi
+                echo "$line" >> "$temp_file"
+            done < "$QUEUE_FILE"
+            mv "$temp_file" "$QUEUE_FILE"
+        fi
+        release_lock
+        sleep 20
+    done
+}
+
+handle_action() {
+    local action="$1"
+    local selection="$2"
+    
+    if [[ -z "$selection" ]]; then
+        return
+    fi
+    
+    local target=$(echo "$selection" | awk '{print $2}')
+    
+    if [[ "$action" == "switch" ]]; then
+        tmux switch-client -t "$target"
+    elif [[ "$action" == "yes" ]]; then
+        tmux send-keys -t "$target" "y" Enter
+        push_state "$target" "agent" "RUNNING" "Approved via cockpit"
+    elif [[ "$action" == "no" ]]; then
+        tmux send-keys -t "$target" "n" Enter
+        push_state "$target" "agent" "RUNNING" "Rejected via cockpit"
+    elif [[ "$action" == "delete" ]]; then
+        remove_state "$target"
+    fi
+}
+
+ui() {
+    if ! command -v fzf &>/dev/null || ! command -v jq &>/dev/null; then
+        echo "Error: fzf and jq are required."
+        exit 1
+    fi
+
+    if [[ ! -s "$QUEUE_FILE" ]]; then
+        echo "Agent queue is empty."
+        sleep 2
+        exit 0
+    fi
+    
+    export QUEUE_FILE
+    export LOCK_FILE
+    export SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+    local fzf_cmd="fzf \
+        --prompt='Agent Queue > ' \
+        --bind 'enter:execute($SCRIPT_PATH handle switch {})+abort' \
+        --bind 'y:execute($SCRIPT_PATH handle yes {})+abort' \
+        --bind 'n:execute($SCRIPT_PATH handle no {})+abort' \
+        --bind 'd:execute($SCRIPT_PATH handle delete {})+reload(jq -r \"\\\"[\\\(.status)] \\\(.session_target) | \\\(.message)\\\"\" $QUEUE_FILE)' \
+        --preview 'tmux capture-pane -p -t {2} 2>/dev/null | tail -n 20' \
+        --preview-window=right:60%"
+
+    jq -r '"[\(.status)] \(.session_target) | \(.message)"' "$QUEUE_FILE" | eval "$fzf_cmd"
+}
+
+popup() {
+    local script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    tmux display-popup -E -w 80% -h 80% "$script_path ui"
+}
+
+init_queue
+
+case "$1" in
+    push)
+        push_state "$2" "$3" "$4" "$5"
+        ;;
+    daemon)
+        daemon
+        ;;
+    ui)
+        ui
+        ;;
+    popup)
+        popup
+        ;;
+    handle)
+        handle_action "$2" "$3"
+        ;;
+    rm)
+        remove_state "$2"
+        ;;
+    *)
+        echo "Usage: agent-q <command> [args...]"
+        echo "Commands:"
+        echo "  push <target> <type> <status> [msg]  Push agent state"
+        echo "  rm <target>                          Remove agent state"
+        echo "  daemon                               Run the background watchdog"
+        echo "  ui                                   Run the fzf cockpit UI"
+        echo "  popup                                Run the UI in a tmux popup"
+        exit 1
+        ;;
+esac
