@@ -27,8 +27,11 @@ and lets me act or jump to its tmux session — without relocating into a separa
 - **User:** single developer (me), single machine, local only.
 - **Platform:** macOS (darwin); login shell is **fish**; primary editor nvim; all agents run
   inside **tmux** panes, inside a tmux session.
-- **Agents (v1):** Claude Code, Codex CLI, Gemini agy CLI. The design should extend to other CLI agents
-  that can emit hooks, but only these two are in scope for v1.
+- **Agents (v1):** Claude Code, Codex CLI, and Gemini agy CLI — **all three are in scope for
+  v1**. The design should extend to other CLI agents that can emit hooks. Gemini's hook surface
+  is less established than Claude's/Codex's, so its registration event(s) are pending
+  confirmation (OQ-5); since an agent with no usable hook is invisible (FR1/NG3 — the watcher
+  does not register it), Gemini stays out only if it cannot emit any usable hook.
 
 ## 3. Goals — what success looks like
 
@@ -76,11 +79,12 @@ A persistent, always-current view of my whole agent fleet that:
 Numbered for traceability — the implementation plan should map each step to an FR.
 
 - **FR1 — Registration (hook-driven).** An agent is registered/visible upon its **first hook
-  event** (Claude `UserPromptSubmit`; Codex `PermissionRequest`/`Stop`). Its identity is its
-  tmux pane. _Accepted limitation in §8._
+  event** (Claude `UserPromptSubmit`; Codex `PermissionRequest`/`Stop`; Gemini agy CLI's
+  equivalent first hook event — pending confirmation, OQ-5). Its identity is its tmux pane.
+  _Accepted limitation in §8._
 - **FR2 — Full-fleet visibility.** The dashboard shows **all** registered agents at once;
   attention-states must not hide the rest. Each row shows at least: agent type
-  (claude/codex), state, location (`session:window`), age/time-in-state, and a short message.
+  (claude/codex/gemini), state, location (`session:window`), age/time-in-state, and a short message.
 - **FR3 — Priority ordering.** Rows are sorted by tier, top to bottom:
   `CRASHED/STALLED` → `WAITING_APPROVAL` → `WAITING_INPUT` → `RUNNING` → `IDLE`.
   Within a tier, oldest-waiting first (tie-break; see OQ-2).
@@ -126,6 +130,11 @@ Numbered for traceability — the implementation plan should map each step to an
 - **Hook-driven registration (FR1).** An agent is **invisible until its first hook fires**. In
   particular, a Codex agent that is working but hasn't hit a permission prompt won't show as
   RUNNING until it prompts or stops. Accepted for simplicity; revisit if it bites.
+- **Gemini hook surface (FR1).** Gemini agy CLI's hooks are less established than Claude's or
+  Codex's. Which events it emits — and therefore which transitions (`RUNNING`/`IDLE`/
+  `WAITING_*`) it can report — is to be confirmed (OQ-5). If it emits only some, Gemini is
+  still registered/visible but with thinner state fidelity; crash/stall remains covered by the
+  watcher (FR9), the same as for the others.
 - **Heuristic crash/stall (FR9).** Detection by scraping pane output is inherently heuristic —
   expect to tune signatures and thresholds; some false positives/negatives are acceptable.
 - **Free-text send risk (FR7).** Sending to a not-ready pane can inject stray input; mitigated
@@ -133,7 +142,9 @@ Numbered for traceability — the implementation plan should map each step to an
 
 ## 9. Acceptance criteria
 
-End-to-end scenarios; each must pass for both a Claude and a Codex agent (parity).
+End-to-end scenarios; each must pass for **each in-scope agent — Claude, Codex, and Gemini agy
+CLI** (parity). Gemini parity is gated on its hook support (OQ-5): until confirmed, Claude +
+Codex parity is the v1 bar and Gemini is a fast-follow that reuses these same scenarios.
 
 1. **Appear:** start an agent and have it act → it shows up within one update cycle. _(FR1, FR4)_
 2. **Block + rise:** trigger a permission prompt → row flips to `WAITING_APPROVAL` and rises to
@@ -157,10 +168,14 @@ End-to-end scenarios; each must pass for both a Claude and a Codex agent (parity
   plan?" emits no hook — issue #19283) via prompt-text matching? _Default: yes._
 - **OQ-4** — Persistent-surface mechanism (dedicated tmux window vs session vs status-line
   widget) is an **approach-level** decision, resolved in the plan, not here.
+- **OQ-5** — **Gemini agy CLI hook mapping:** which Gemini hook events map to our states
+  (registration / `RUNNING` / `IDLE` / `WAITING_APPROVAL` / `WAITING_INPUT`), and whether its
+  hook surface is rich enough for full parity. _Default: confirm during build; ship Claude +
+  Codex first and add Gemini as a fast-follow._
 
 ## 11. Glossary
 
-- **Agent** — a Claude Code or Codex CLI process running in a tmux pane.
+- **Agent** — a Claude Code, Codex CLI, or Gemini agy CLI process running in a tmux pane.
 - **Attention-state** — a state that means the agent needs me (see §5).
 - **Registration** — the moment an agent becomes visible in the dashboard (FR1).
 - **Warp / jump** — switching the tmux client to the agent's pane (FR8).
