@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mloning.agentq-watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Update this path after `cargo install --path .` -->
+        <string>/Users/mloning/.cargo/bin/agentq</string>
+        <string>watch</string>
+    </array>
+
+    <!-- Run continuously; agentq watch has its own internal loop -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/agentq-watch.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/agentq-watch.stderr.log</string>
+
+    <!-- Only run when the user is logged in -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>

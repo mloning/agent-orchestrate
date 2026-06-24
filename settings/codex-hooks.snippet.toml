@@ -1,0 +1,13 @@
+# Codex CLI hook configuration
+# Merge into ~/.codex/config.toml
+#
+# Requires: [features] hooks = true
+# and trust configuration for the hook commands.
+
+[hooks.PermissionRequest]
+type = "command"
+command = "agentq status WAITING_APPROVAL 'permission requested'"
+
+[hooks.Stop]
+type = "command"
+command = "agentq status IDLE 'agent stopped'"

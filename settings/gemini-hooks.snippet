@@ -1,0 +1,13 @@
+# Gemini agy CLI hook configuration — placeholder
+#
+# Pending OQ-5: confirm which Gemini hook events map to our states.
+# The state model already accepts @agent_type "gemini", so this is a
+# producer-only addition with zero consumer change.
+#
+# Once Gemini's hook surface is confirmed, wire the same pattern:
+#   <first-hook-event> → agentq status RUNNING
+#   <permission-event> → agentq status WAITING_APPROVAL
+#   <input-event>      → agentq status WAITING_INPUT
+#   <stop-event>       → agentq status IDLE
+#
+# Set AGENTQ_TYPE=gemini in the hook environment.

@@ -1,12 +1,8 @@
-# Approach B — Agent Triage Dashboard (right-sized Rust binary)
-
-> Revised to conform to `spec.md`. Where this doc previously disagreed with the spec, the
-> spec won (`spec.md` §0). The three substantive changes from the first draft: the surface is
-> now a **persistent tmux session**, not an ephemeral `display-popup` (FR5); the TUI gains a
-> **guarded free-text send** (FR7); and the **priority order is corrected** so CRASHED/STALLED
-> sits at the top tier (FR3).
+# Agent Triage Dashboard
 
 ## Context
+
+Spec: @spec.md
 
 I run several AI coding agents (Claude Code, Codex CLI, and — pending hook support — Gemini
 agy CLI) in parallel tmux panes alongside nvim, and I want a **persistent triage dashboard**
@@ -35,7 +31,7 @@ point the hooks at `agentq status`, or go straight to B.
 The load-bearing decision. The spec requires a **persistent surface** that "keeps running when
 I switch away … and is still present and current when I switch back" and is explicitly **not**
 a modal popup that closes on navigation (FR5; Acceptance #3). OQ-4 leaves the mechanism to this
-plan, choosing among *dedicated window / dedicated session / status-line widget*.
+plan, choosing among _dedicated window / dedicated session / status-line widget_.
 
 **Decision: a dedicated tmux session named `agentq`**, holding one long-lived `agentq tui`
 process. It is reachable from anywhere with a single keybind and never dies on navigation, so it
@@ -68,12 +64,12 @@ tmux config stays a one-liner and the logic is testable in Rust rather than `if-
 
 `agentq` is one binary with four subcommands sharing a thin `tmux` wrapper module:
 
-| Subcommand | Role | Replaces (Approach A) |
-|---|---|---|
-| `agentq status <STATUS> [msg]` | hook target; tags the current pane | `bin/agent-status` |
-| `agentq tui` | the persistent live dashboard (runs in session `agentq`) | `bin/agent-triage.sh` (fzf) |
-| `agentq open` | summon/toggle/return binding; lazily creates the session | the `display-popup` binding |
-| `agentq watch` | resiliency scrape loop (launchd) | `watchdog/agent-watch.sh` |
+| Subcommand                     | Role                                                     | Replaces (Approach A)       |
+| ------------------------------ | -------------------------------------------------------- | --------------------------- |
+| `agentq status <STATUS> [msg]` | hook target; tags the current pane                       | `bin/agent-status`          |
+| `agentq tui`                   | the persistent live dashboard (runs in session `agentq`) | `bin/agent-triage.sh` (fzf) |
+| `agentq open`                  | summon/toggle/return binding; lazily creates the session | the `display-popup` binding |
+| `agentq watch`                 | resiliency scrape loop (launchd)                         | `watchdog/agent-watch.sh`   |
 
 ## State model (unchanged from Approach A)
 
@@ -85,26 +81,27 @@ The pane id is the unique key — dedup is free and state auto-cleans when the p
 
 ## Project layout (Cargo, in `~/Dev/projects/agent-orchestrate`)
 
-| Path | Role |
-|---|---|
-| `Cargo.toml` | crate `agentq`; deps: `ratatui`, `crossterm`, `clap` (derive), `anyhow`, `serde_json` (optional, hook-stdin enrichment) |
-| `src/main.rs` | `clap` dispatch → `status` / `tui` / `open` / `watch` |
-| `src/tmux.rs` | wrapper over `tmux` via `std::process::Command`: `list_panes()`, `set_status()`, `send_keys()`, `send_line()`, `warp()`, `capture_pane()`, session helpers |
-| `src/model.rs` | `Status` enum (+ spec-ordered priority `Ord`), `Agent` struct, parse a `list-panes` line |
-| `src/status.rs` | `agentq status`: read `$TMUX_PANE`, write the three options in one tmux call |
-| `src/tui.rs` | ratatui app: poll loop, render list (+ optional detail), keybinds, reply composer |
-| `src/open.rs` | `agentq open`: toggle between work and the `agentq` session; lazily create it |
-| `src/watch.rs` | crash/stall detection loop |
-| `settings/claude-settings.snippet.json` | hooks pointing at `agentq status ...` |
-| `settings/codex-hooks.snippet.toml` | same for Codex |
-| `settings/gemini-hooks.snippet` | placeholder; wired iff Gemini exposes command hooks (see OQ) |
-| `tmux/agent-orchestrate.conf` | `bind-key i run-shell "agentq open"` |
-| `launchd/com.mloning.agentq-watch.plist` | runs `agentq watch` (Phase 2) |
-| `README.md` | build + wire-up |
+| Path                                     | Role                                                                                                                                                       |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Cargo.toml`                             | crate `agentq`; deps: `ratatui`, `crossterm`, `clap` (derive), `anyhow`, `serde_json` (optional, hook-stdin enrichment)                                    |
+| `src/main.rs`                            | `clap` dispatch → `status` / `tui` / `open` / `watch`                                                                                                      |
+| `src/tmux.rs`                            | wrapper over `tmux` via `std::process::Command`: `list_panes()`, `set_status()`, `send_keys()`, `send_line()`, `warp()`, `capture_pane()`, session helpers |
+| `src/model.rs`                           | `Status` enum (+ spec-ordered priority `Ord`), `Agent` struct, parse a `list-panes` line                                                                   |
+| `src/status.rs`                          | `agentq status`: read `$TMUX_PANE`, write the three options in one tmux call                                                                               |
+| `src/tui.rs`                             | ratatui app: poll loop, render list (+ optional detail), keybinds, reply composer                                                                          |
+| `src/open.rs`                            | `agentq open`: toggle between work and the `agentq` session; lazily create it                                                                              |
+| `src/watch.rs`                           | crash/stall detection loop                                                                                                                                 |
+| `settings/claude-settings.snippet.json`  | hooks pointing at `agentq status ...`                                                                                                                      |
+| `settings/codex-hooks.snippet.toml`      | same for Codex                                                                                                                                             |
+| `settings/gemini-hooks.snippet`          | placeholder; wired iff Gemini exposes command hooks (see OQ)                                                                                               |
+| `tmux/agent-orchestrate.conf`            | `bind-key i run-shell "agentq open"`                                                                                                                       |
+| `launchd/com.mloning.agentq-watch.plist` | runs `agentq watch` (Phase 2)                                                                                                                              |
+| `README.md`                              | build + wire-up                                                                                                                                            |
 
 ## Phase 1 — `agentq status` + `agentq tui` + `agentq open` (MVP)
 
 **`src/tmux.rs`** — the only place that shells out. Representative shapes:
+
 ```rust
 pub fn set_status(pane: &str, status: &str, msg: &str, ts: u64) -> anyhow::Result<()> {
     // one tmux invocation, multiple ; -separated commands (NFR3: fast hook)
@@ -149,6 +146,7 @@ draft): tier order, top to bottom, is
 `CRASHED/STALLED → WAITING_APPROVAL → WAITING_INPUT → RUNNING → IDLE`.
 CRASHED and STALLED share the top tier. Within a tier, **oldest `@agent_updated` first**
 (OQ-2 default; tie-break is a one-line change if I later prefer most-recently-changed).
+
 ```rust
 // smaller sorts higher; (tier, @agent_updated ascending)
 fn tier(&self) -> u8 { match self {
@@ -161,6 +159,7 @@ fn tier(&self) -> u8 { match self {
 ```
 
 **`src/tui.rs`** — event loop polls `tmux::list_panes()` every ~500ms (also redraws on key):
+
 - shows the **whole fleet** — every pane with `@agent_status` set, RUNNING and IDLE included
   (FR2) — sorted by the FR3 tier order above, color-coded; each row shows type, state,
   `session:window`, age/time-in-state, and the short message (FR2). It's a live dashboard, not
@@ -172,7 +171,7 @@ fn tier(&self) -> u8 { match self {
   - `r` — **reply / free-text send** (FR7): opens a one-line composer at the bottom; `Enter`
     sends via `send_line(pane, text)`, `Esc` cancels. **Guard:** `r` only opens directly when
     the selected agent is in an attention-state (`WAITING_APPROVAL | WAITING_INPUT |
-    STALLED | CRASHED`). For any non-attention state (RUNNING/IDLE) it first requires a
+STALLED | CRASHED`). For any non-attention state (RUNNING/IDLE) it first requires a
     confirm (`send to a non-waiting pane? y/N`) so stray input can't be injected into a busy
     agent (FR7 guard; §8 tradeoff).
   - `Enter` — `warp(pane_id)`: switch the client to the agent's **exact pane** (FR8). The
@@ -185,6 +184,7 @@ fn tier(&self) -> u8 { match self {
   itself exits (e.g. the session is killed) — restore on every exit path.
 
 **`src/open.rs`** — the summon/toggle/return binding (FR5/FR8 return path):
+
 ```text
 current = tmux display -p '#{client_session}'
 if current == "agentq":
@@ -196,28 +196,31 @@ else:
     tmux set -g @agentq_origin "#{session_name}:#{window_index}.#{pane_index}"
     tmux switch-client -t agentq
 ```
+
 This gives the spec's "switch away and back" (Acceptance #3) and "return to where I was"
 (Acceptance #6) with a single key. Note the documented semantics: `@agentq_origin` tracks the
-pane I last summoned the dashboard *from*. After an `Enter`-warp to an agent, that agent's pane
+pane I last summoned the dashboard _from_. After an `Enter`-warp to an agent, that agent's pane
 becomes my new "work" location, so a subsequent `prefix + i` toggles dashboard↔agent — exactly
 the triage loop I want. (Return-semantics nuance flagged in gotchas to validate by feel.)
 
 **Hook snippets** — identical events to Approach A, command swapped to the binary (FR1):
+
 - Claude (`~/.claude/settings.json`): `Notification`/`permission_prompt` → `agentq status
-  WAITING_APPROVAL permission`; `elicitation_dialog` → `WAITING_INPUT`; `UserPromptSubmit` →
+WAITING_APPROVAL permission`; `elicitation_dialog` → `WAITING_INPUT`; `UserPromptSubmit` →
   `RUNNING` (this is the registration event, FR1); `Stop` → `IDLE`. Avoid `idle_prompt`
   (known false-positive).
 - Codex (`~/.codex/config.toml`, `[features] hooks = true` + trust): `PermissionRequest` →
   `WAITING_APPROVAL`; `Stop` → `IDLE` (registration events for Codex, FR1).
 - Gemini agy CLI: in scope for v1 (spec §2). Wire the same contract once its first-hook and
   `WAITING_*` events are confirmed (spec OQ-5). The state model already accepts `@agent_type
-  gemini`, so this is a **producer-only** addition with zero consumer change — Gemini ships as a
+gemini`, so this is a **producer-only** addition with zero consumer change — Gemini ships as a
   fast-follow behind Claude+Codex.
 
 Use an absolute path to the installed `agentq` (or ensure `~/.cargo/bin` is on the hook shell
 PATH).
 
 **tmux keybind** (`tmux/agent-orchestrate.conf`, sourced from `~/.tmux.conf`):
+
 ```
 bind-key i run-shell "agentq open"
 ```
@@ -228,7 +231,7 @@ A loop (every ~25s, OQ-1), run via launchd. For each pane with `@agent_status ==
 stale `@agent_updated`: `tmux::capture_pane()` tail → match crash signatures → set `CRASHED`;
 `@agent_updated` older than 10 min while RUNNING → `STALLED`. Detection only — never
 registration (NG3). Also catches the **plan-approval gap** (Claude's "Accept this plan?" emits
-no hook, issue #19283; OQ-3 default *yes*) by matching the prompt text.
+no hook, issue #19283; OQ-3 default _yes_) by matching the prompt text.
 
 **Crash signatures must be fish-aware and must not match the agents' own prompts** (NFR6,
 NFR7). My interactive shell is fish, so a bare reborn shell shows the **fish** prompt, not `$ `
@@ -246,7 +249,7 @@ rare. Loadable as `launchd/com.mloning.agentq-watch.plist`.
   killed.
 - **Toggle/return feel** — `agentq open`'s `@agentq_origin` semantics (above) are the load-
   bearing UX. Validate the full loop by feel: summon → glance → back; summon → `Enter` warp →
-  `prefix+i` back. If "return to the *pre-dashboard* pane after a warp" turns out to matter,
+  `prefix+i` back. If "return to the _pre-dashboard_ pane after a warp" turns out to matter,
   store a small origin stack instead of a single global option (OQ-R).
 - **Exact-pane warp** — verify `warp(pane_id)` lands on the precise pane (not just the window),
   and that a `#{pane_id}` is an acceptable target for `switch-client`/`select-window`/

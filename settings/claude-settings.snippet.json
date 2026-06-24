@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "command": "agentq status RUNNING 'user prompt submitted'"
+      }
+    ],
+    "Notification": [
+      {
+        "type": "command",
+        "command": "agentq status WAITING_APPROVAL \"$CLAUDE_NOTIFICATION_MESSAGE\""
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "agentq status IDLE 'agent stopped'"
+      }
+    ]
+  }
+}
