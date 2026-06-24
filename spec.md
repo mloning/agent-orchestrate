@@ -22,6 +22,10 @@ cockpit**, which pulls me out of my own tmux + nvim environment. The gap is spec
 a **persistent triage surface** that shows every agent's state, alerts me when one needs me,
 and lets me act or jump to its tmux session — without relocating into a separate app.
 
+A survey of existing tools against these requirements is in **§12** — no off-the-shelf tool
+covers the spec. The defining gaps that hold across all of them are the crash/stall watcher
+(FR9), arbitrary free-text reply (FR7), and hook-driven **and** pane-keyed registration (FR1).
+
 ## 2. Users & environment
 
 - **User:** single developer (me), single machine, local only.
@@ -181,3 +185,88 @@ Codex parity is the v1 bar and Gemini is a fast-follow that reuses these same sc
 - **Warp / jump** — switching the tmux client to the agent's pane (FR8).
 - **Hook** — an agent-emitted event (Claude/Codex) that runs a command; our integration seam.
 - **Watcher** — a background loop that scrapes pane output to detect crashes/stalls (FR9).
+
+---
+
+## 12. Prior art — existing solutions surveyed
+
+_Informational, not normative (this section does not change any requirement). Multi-source web
+survey with adversarial verification, conducted 2026-06-24. Conclusion: **no off-the-shelf tool
+covers the spec.** Every candidate addresses a subset; the closest are tmux-native TUIs that
+get fleet visibility + jump-to-pane, but the FR9 watcher, FR7 free-text reply, and a combined
+hook-driven **and** pane-keyed FR1 are unmet across the board._
+
+### 12.1 Coverage against the functional requirements
+
+Legend: ✅ covered · ⚠️ partial · ❌ absent. FR2 (full-fleet visibility) is met at a basic level
+by every listed tool, so it is folded into FR4/FR5 rather than given its own column.
+
+| Tool | Agents (CC/Codex/Gemini) | FR1 hook + pane-keyed | FR3 attention float | FR4 live | FR5 persistent in-tmux | FR6 approve/deny | FR7 free-text | FR8 jump-to-pane | FR9 crash/stall watcher |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **tmuxcc** (nyanko3141592) | ✅ +OpenCode | ⚠️ pane-keyed but **poll-based**, not hooks | ⚠️ states shown, no doc'd float | ✅ ~500ms poll | ✅ tmux-native TUI | ✅ `y`/`n` | ⚠️ numbered choices only (`1-9`), no arbitrary text | ✅ `f`/`F` focus pane | ❌ |
+| **marmonitor** (mjjo16) | ✅ | ⚠️ **process-based**, not pane | ✅ permission floated #1 | ✅ 2s daemon | ⚠️ status-bar + modal popup | ❌ read-only | ❌ | ✅ `Opt+1–5`/`prefix+j` | ⚠️ stall yes; crash inferred |
+| **ntm** (Named Tmux Manager) | ✅ | ❌ spawns labeled panes, not hook-keyed | ❌ | ⚠️ `--watch` (human-driven) | ✅ tmux-native | ❌ (refuted 0–3) | ❌ | ✅ `ntm zoom`/`attach` | ❌ |
+| **Claude Squad** | ✅ +Aider | ❌ 500ms poll, not hooks | ❌ flat list | ⚠️ status only | ✅ Bubbletea TUI | ⚠️ blanket `--autoyes` only | ❌ | ❌ | ❌ |
+| **uzi** | ✅ | ❌ session-per-agent | ❌ recency-sorted | ✅ `ls -w` 1s | ❌ no persistent dash | ❌ | ⚠️ broadcast-to-**all** | ❌ orphaned alias | ❌ stall branch is dead code |
+| **Claude Code Agent Teams** | ❌ Claude-only | n/a | ❌ *hides* idle (inverse) | ✅ | ❌ 1 team/session, dies w/ session | ⚠️ bubbles to lead | ❌ | ⚠️ split-pane view | ❌ |
+| **disler multi-agent-observability** | ❌ Claude-only | ⚠️ hook-driven but keyed to `session_id`, **not pane** | ❌ chrono timeline | ✅ WebSocket | ❌ **separate web cockpit** (violates NG1) | ❌ | ❌ | ❌ | ❌ |
+
+### 12.2 What the survey establishes
+
+- **tmuxcc is the closest single match** — tmux-native TUI, pane-keyed tree, ~500ms live poll,
+  approve/deny + numbered choices, focus-to-pane. It misses FR7 (no arbitrary free-text), FR9
+  (no crash/stall watcher), and its FR1 is poll-based rather than hook-driven. (Rust, MIT, v0.1.5.)
+- **marmonitor is the closest on FR3/FR9** — it actually floats `permission` to the top and
+  detects stalls, but it is read-only (no FR6/FR7) and binds to processes, not panes (FR1/NFR5 risk).
+- **The gaps that hold across _every_ tool:**
+  1. **FR9 — autonomous crash/stall watcher.** No tool ships a pane-output scraper for
+     crash-to-bare-shell; this is structural, because **no hook fires for a crash or stall**
+     (Claude's `StopFailure` only covers API errors). Detection must be derived externally from tmux.
+  2. **FR7 — arbitrary free-text reply.** Tools offer at most `y/n` + numbered choices (tmuxcc)
+     or broadcast-to-all (uzi); none send a guarded free-text line to one selected pane.
+  3. **FR1 — hook-driven _and_ pane-keyed.** Poll-based tools (tmuxcc) are pane-keyed but not
+     hook-driven; the one hook-driven tool (disler) is keyed to `session_id`, not a tmux pane.
+     Nobody combines both. Claude Code hooks emit no tmux pane field — the established workaround
+     is to read `$TMUX_PANE` from the hook's own environment at fire time.
+
+### 12.3 The spec is buildable from existing primitives (high confidence)
+
+- **Claude Code hooks** cover registration + attention-states: `SessionStart`→register;
+  `Notification`(`permission_prompt`/`idle_prompt`)→`WAITING_APPROVAL`/`WAITING_INPUT`;
+  `Stop`/`SessionEnd`→`IDLE`/gone. _Caveat:_ the documented `notification_type` field is missing
+  in practice (GitHub #11964, closed "not planned") — **match on message text**, not the field.
+- **tmux** supplies what hooks can't: `capture-pane -p -S/-E` reads any pane (even detached —
+  verified on tmux 3.4) for the FR9 watcher; `pipe-pane -O` push-streams a pane; control-mode
+  `%output` is async per-pane (but scoped to the attached session only).
+
+### 12.4 Caveats & not characterized
+
+- **Not adversarially verified** (surfaced but outside the verified set) — worth a direct read
+  before building, and several relate to OQ-5: `agent-dashboard` (bjornjee, Go/Bubbletea, parses
+  Claude Code JSONL transcripts, has a phone PWA), `tmux-agent-sidebar` (hiroppy, cross-session
+  sidebar), `tmux-agent-status` (samleeney), `tmux-agent-indicator`, `tap-to-tmux`,
+  `agent-tmux-manager` (damelLP), `recon` (gavraz).
+- **Not characterized** — Vibe Kanban, Conductor, Crystal yielded no verified claims; they are
+  broadly GUI/Electron cockpits that would clash with NG1/NFR2 regardless. Anthropic's built-in
+  **Agent View** (shipped 2026-05-12) is a single-list in-Claude dashboard, Claude-only and not
+  tmux-persistent.
+- **Open for v1 (ties to OQ-5):** whether Codex CLI / Gemini CLI expose a Claude-equivalent hook
+  surface, or whether their states must come purely from pane-scraping.
+
+### 12.5 Sources (primary unless noted)
+
+- tmuxcc — https://github.com/nyanko3141592/tmuxcc
+- marmonitor — https://github.com/mjjo16/marmonitor
+- ntm — https://github.com/Dicklesworthstone/ntm
+- Claude Squad — https://github.com/smtg-ai/claude-squad
+- uzi — https://github.com/devflowinc/uzi
+- Claude Code Agent Teams — https://code.claude.com/docs/en/agent-teams
+- disler multi-agent-observability — https://github.com/disler/claude-code-hooks-multi-agent-observability
+- Claude Code hooks reference — https://code.claude.com/docs/en/hooks
+- tmux control mode — https://github.com/tmux/tmux/wiki/Control-Mode
+- tmux(1) man page — https://www.man7.org/linux/man-pages/man1/tmux.1.html
+- Not-yet-verified candidates: agent-dashboard https://github.com/bjornjee/agent-dashboard ·
+  tmux-agent-sidebar https://github.com/hiroppy/tmux-agent-sidebar ·
+  tmux-agent-status https://github.com/samleeney/tmux-agent-status ·
+  agent-tmux-manager https://github.com/damelLP/agent-tmux-manager ·
+  recon https://github.com/gavraz/recon
