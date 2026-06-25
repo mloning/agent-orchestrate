@@ -241,6 +241,46 @@ flag false CRASHEDs. Combine a positive shell-prompt match with the **absence** 
 chrome, plus language stack-trace signatures (node/python), and tune to keep false positives
 rare. Loadable as `launchd/com.mloning.agentq-watch.plist`.
 
+## Implementation status
+
+All four subcommands are built and the project compiles clean (`cargo build`/`clippy`) with
+unit tests (`cargo test`, 13 passing) covering the load-bearing logic: FR3 tier ordering +
+within-tier oldest-first, `list-panes` line parsing, and the watch heuristics (bare-fish-shell
+→ CRASHED, healthy `❯` → **not** crashed, a crashed Codex with `❯` still in scrollback → CRASHED,
+stack-trace + chrome gating, plan-prompt match).
+
+- **`status`** — done; round-trip verified against tmux, `<10ms` single tmux call, no-op when
+  `$TMUX_PANE` is unset, message sanitized (tabs/newlines → spaces) so it can't corrupt the
+  tab-delimited `list-panes` row. Agent kind is passed via a `--type` flag (no env var).
+- **`tui`** — done (`src/tui.rs`, ratatui). 500 ms poll loop with 100 ms event tick; full-fleet
+  table (type/state/`session:window`/age/message), FR3-sorted and color-coded; `j/k/g/G`,
+  `y`/`n` (act + optimistic RUNNING), guarded `r` reply (`ConfirmSend` for non-attention panes),
+  `Enter` warp, `d` detail (tail of `capture-pane`), `q`/`Esc` return-to-origin (persistent —
+  does **not** quit). `Ctrl-C` is the explicit teardown/exit. Selection is tracked by `pane_id`,
+  so the cursor follows its agent as the sorted list reshuffles — verified live (a RUNNING agent
+  kept the cursor when another flipped to CRASHED and rose above it).
+- **`open`** — done; returns via `warp(@agentq_origin)` for exact-pane landing, and swallows a
+  dead-origin error so the keybind never pops a tmux error.
+- **`watch`** — done (`src/watch.rs`). **Refinement vs the prose above:** STALLED is detected by
+  the captured tail being **unchanged** for `STALL_SECS` (default 600) while RUNNING — not by a
+  stale `@agent_updated` alone — so a healthy long-running agent that is actively printing is
+  never false-flagged. `❯` is excluded from crash signatures (NFR6) but is **not** treated as
+  proof-of-alive, so a crashed Codex sitting at a fish shell is still detected. Signature lists
+  (`AGENT_CHROME`, `CRASH_SIGNATURES`, `PLAN_PROMPT_MARKERS`) are `const`s at the top of the
+  module, meant to be tuned to the actual fish prompt in use.
+
+**Hook wiring:** `scripts/install-claude-hooks.sh` safely merges the Claude hooks into
+`~/.claude/settings.json` — it follows symlinks (writing through to a dotfiles-repo target while
+preserving the symlink), is idempotent (replaces our own prior hooks even across command-format
+changes), backs up, validates JSON, and writes atomically. Each hook command is fire-and-forget
+(`… 2>/dev/null || true`) so a missing/failing `agentq` never blocks or clutters the agent.
+
+**Remaining (as planned, not blockers):** Gemini producer hooks (OQ-5, fast-follow — consumer
+is already type-agnostic); user-side wiring (`cargo install --path .`, source the tmux conf,
+run the installer, `launchctl load` the plist); and the by-feel interactive validations
+below (warp precision, toggle/return cadence, hook latency) that need the live multi-agent
+environment.
+
 ## Known risks / gotchas to validate during build
 
 - **Persistent session vs popup** — confirm `agentq tui` in session `agentq` survives

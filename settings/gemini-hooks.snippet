@@ -4,10 +4,9 @@
 # The state model already accepts @agent_type "gemini", so this is a
 # producer-only addition with zero consumer change.
 #
-# Once Gemini's hook surface is confirmed, wire the same pattern:
-#   <first-hook-event> → agentq status RUNNING
-#   <permission-event> → agentq status WAITING_APPROVAL
-#   <input-event>      → agentq status WAITING_INPUT
-#   <stop-event>       → agentq status IDLE
-#
-# Set AGENTQ_TYPE=gemini in the hook environment.
+# Once Gemini's hook surface is confirmed, wire the same pattern (pass the agent
+# kind with --type, and keep it fire-and-forget with `2>/dev/null || true`):
+#   <first-hook-event> → agentq status RUNNING          --type gemini 2>/dev/null || true
+#   <permission-event> → agentq status WAITING_APPROVAL --type gemini 2>/dev/null || true
+#   <input-event>      → agentq status WAITING_INPUT    --type gemini 2>/dev/null || true
+#   <stop-event>       → agentq status IDLE             --type gemini 2>/dev/null || true

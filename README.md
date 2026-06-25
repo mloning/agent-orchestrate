@@ -15,22 +15,28 @@ A persistent, live-updating tmux dashboard for triaging AI coding agents
 ## Quick start
 
 ```bash
-# Build and install
+# Build and install (puts `agentq` in ~/.cargo/bin)
 cargo install --path .
 
 # Wire tmux keybinding (add to ~/.tmux.conf)
 source-file ~/Dev/projects/agent-orchestrate/tmux/agent-orchestrate.conf
 # Then reload: tmux source ~/.tmux.conf
 
-# Wire Claude Code hooks (merge into ~/.claude/settings.json)
-# See settings/claude-settings.snippet.json
+# Wire Claude Code hooks — merges into ~/.claude/settings.json safely:
+#   follows symlinks (dotfiles repos), idempotent, backs up, validates.
+# Preview first, then apply:
+scripts/install-claude-hooks.sh --dry-run
+scripts/install-claude-hooks.sh
 
-# Wire Codex hooks (merge into ~/.codex/config.toml)
+# Wire Codex hooks (merge into ~/.codex/config.toml by hand for now)
 # See settings/codex-hooks.snippet.toml
-
-# Set agent type in your shell environment (per-agent pane)
-export AGENTQ_TYPE=claude  # or codex, gemini
 ```
+
+The hook commands pass the agent kind with `--type` and use the absolute `agentq`
+path, so nothing extra needs to be exported per pane. Each command ends in
+`2>/dev/null || true` so a missing or failing `agentq` exits cleanly and never
+blocks or clutters the agent. (Claude delivers hook input as stdin JSON, not env
+vars, so the status messages are short static labels.)
 
 ## Usage
 

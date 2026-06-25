@@ -4,10 +4,14 @@
 # Requires: [features] hooks = true
 # and trust configuration for the hook commands.
 
+# `--type codex` tags the pane's agent kind. The trailing `2>/dev/null || true`
+# makes the hook fire-and-forget so a missing/failing agentq never disturbs the
+# agent — this assumes Codex runs the command via a shell; drop it if Codex uses
+# exec form (in which case the redirect/`||` would be passed as literal args).
 [hooks.PermissionRequest]
 type = "command"
-command = "agentq status WAITING_APPROVAL 'permission requested'"
+command = "agentq status WAITING_APPROVAL --type codex 2>/dev/null || true"
 
 [hooks.Stop]
 type = "command"
-command = "agentq status IDLE 'agent stopped'"
+command = "agentq status IDLE --type codex 2>/dev/null || true"

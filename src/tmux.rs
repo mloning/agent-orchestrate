@@ -47,17 +47,28 @@ pub fn set_status(
     agent_type: &str,
     ts: &str,
 ) -> Result<()> {
+    // The message is stored on one tab-delimited `list-panes` field, so strip
+    // any tabs/newlines that would otherwise split a row or shift columns.
+    let msg = sanitize(msg);
     run_tmux(&[
         "set-option", "-t", pane, "-p", "@agent_status", status, ";",
-        "set-option", "-t", pane, "-p", "@agent_msg", msg, ";",
+        "set-option", "-t", pane, "-p", "@agent_msg", &msg, ";",
         "set-option", "-t", pane, "-p", "@agent_updated", ts, ";",
         "set-option", "-t", pane, "-p", "@agent_type", agent_type,
     ])
 }
 
+/// Collapse tabs/newlines/carriage-returns to spaces so a value is safe to
+/// store in a tab-delimited, line-based `list-panes` field.
+fn sanitize(s: &str) -> String {
+    s.replace(['\t', '\n', '\r'], " ")
+}
+
 /// List all panes across all sessions and return parsed, sorted `Agent`s.
 pub fn list_panes() -> Vec<Agent> {
-    let format = "#{pane_id}\t#{@agent_status}\t#{pane_current_path}\t#{@agent_type}\t#{@agent_updated}\t#{@agent_msg}";
+    // FR2: location is reported as `session:window`. The pane id (first field)
+    // remains the unique key used for warp/send.
+    let format = "#{pane_id}\t#{@agent_status}\t#{session_name}:#{window_index}\t#{@agent_type}\t#{@agent_updated}\t#{@agent_msg}";
     let output = match run_tmux_output(&["list-panes", "-a", "-F", format]) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
@@ -70,11 +81,15 @@ pub fn list_panes() -> Vec<Agent> {
     agents
 }
 
-/// Switch to the target pane (across sessions/windows).
+/// Switch to the target pane (across sessions/windows). FR8: land on the
+/// EXACT pane, not just its window. A `#{pane_id}` resolves to its session for
+/// `switch-client` and its window for `select-window`.
 pub fn warp(pane_id: &str) -> Result<()> {
-    // switch-client to the session, select the window, then select the pane
-    run_tmux(&["switch-client", "-t", pane_id])?;
-    run_tmux(&["select-pane", "-t", pane_id])
+    run_tmux(&[
+        "switch-client", "-t", pane_id, ";",
+        "select-window", "-t", pane_id, ";",
+        "select-pane", "-t", pane_id,
+    ])
 }
 
 /// Send keys to a pane (with Enter).

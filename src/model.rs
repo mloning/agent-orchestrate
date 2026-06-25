@@ -1,8 +1,34 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::style::Color;
+
+// ---------------------------------------------------------------------------
+// Time helpers
+// ---------------------------------------------------------------------------
+
+/// Current unix time in seconds. Used for `@agent_updated` and age display.
+pub fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Render an elapsed duration (seconds) compactly: `12s`, `3m`, `1h`, `2d`.
+pub fn humanize_age(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Status
@@ -148,4 +174,86 @@ pub fn parse_pane_line(line: &str) -> Option<Agent> {
         updated,
         message: message.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn agent(pane: &str, status: Status, updated: u64) -> Agent {
+        Agent {
+            pane_id: pane.into(),
+            status,
+            agent_type: "claude".into(),
+            location: "work:0".into(),
+            updated,
+            message: String::new(),
+        }
+    }
+
+    #[test]
+    fn parses_full_line() {
+        let line = "%3\tWAITING_APPROVAL\twork:1\tcodex\t1700\trun tests?";
+        let a = parse_pane_line(line).expect("should parse");
+        assert_eq!(a.pane_id, "%3");
+        assert_eq!(a.status, Status::WaitingApproval);
+        assert_eq!(a.location, "work:1");
+        assert_eq!(a.agent_type, "codex");
+        assert_eq!(a.updated, 1700);
+        assert_eq!(a.message, "run tests?");
+    }
+
+    #[test]
+    fn message_may_contain_tabs() {
+        // splitn(6) keeps everything after the 5th tab in the message field.
+        let a = parse_pane_line("%1\tRUNNING\tw:0\tclaude\t10\ta\tb").unwrap();
+        assert_eq!(a.message, "a\tb");
+    }
+
+    #[test]
+    fn drops_unregistered_and_unknown() {
+        // empty @agent_status (pane never fired a hook)
+        assert!(parse_pane_line("%1\t\tw:0\tclaude\t10\t").is_none());
+        // unparseable status
+        assert!(parse_pane_line("%1\tBOGUS\tw:0\tclaude\t10\t").is_none());
+    }
+
+    #[test]
+    fn fr3_tier_order_then_oldest_first() {
+        // Deliberately out of order; sorting must yield the FR3 tiers.
+        let mut v = [
+            agent("%idle", Status::Idle, 1),
+            agent("%run", Status::Running, 1),
+            agent("%wi", Status::WaitingInput, 1),
+            agent("%wa", Status::WaitingApproval, 1),
+            agent("%stall", Status::Stalled, 1),
+            agent("%crash", Status::Crashed, 1),
+        ];
+        v.sort();
+        let order: Vec<&str> = v.iter().map(|a| a.pane_id.as_str()).collect();
+        // CRASHED/STALLED share tier 0 (stable order between them is fine).
+        assert_eq!(order[2], "%wa");
+        assert_eq!(order[3], "%wi");
+        assert_eq!(order[4], "%run");
+        assert_eq!(order[5], "%idle");
+        assert!(v[0].status.tier() == 0 && v[1].status.tier() == 0);
+    }
+
+    #[test]
+    fn within_tier_oldest_waiting_first() {
+        let mut v = [
+            agent("%new", Status::WaitingApproval, 200),
+            agent("%old", Status::WaitingApproval, 100),
+        ];
+        v.sort();
+        assert_eq!(v[0].pane_id, "%old"); // smaller @agent_updated = older = higher
+    }
+
+    #[test]
+    fn humanize_age_units() {
+        assert_eq!(humanize_age(5), "5s");
+        assert_eq!(humanize_age(125), "2m");
+        assert_eq!(humanize_age(7200), "2h");
+        assert_eq!(humanize_age(172_800), "2d");
+    }
 }

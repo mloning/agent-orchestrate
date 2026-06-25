@@ -24,6 +24,9 @@ enum Command {
         /// Optional message to attach
         #[arg(default_value = "")]
         message: String,
+        /// Agent type shown in the dashboard (claude | codex | gemini)
+        #[arg(long = "type", short = 't', default_value = "unknown")]
+        agent_type: String,
     },
     /// Launch the persistent live dashboard
     Tui,
@@ -37,7 +40,11 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Status { status, message } => status::run(&status, &message),
+        Command::Status {
+            status,
+            message,
+            agent_type,
+        } => status::run(&status, &message, &agent_type),
         Command::Tui => tui::run(),
         Command::Open => open::run(),
         Command::Watch => watch::run(),

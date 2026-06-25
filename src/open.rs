@@ -13,10 +13,13 @@ pub fn run() -> Result<()> {
     let session = tmux::current_session()?;
 
     if session == "agentq" {
-        // Return to origin
-        let origin = tmux::get_global_option("@agentq_origin")?;
-        if !origin.is_empty() {
-            tmux::switch_client(&origin)?;
+        // Return to where I summoned the dashboard from. Use warp so we land on
+        // the exact origin pane; ignore errors so a since-closed pane doesn't
+        // surface a tmux error popup from the keybinding.
+        if let Ok(origin) = tmux::get_global_option("@agentq_origin") {
+            if !origin.is_empty() {
+                let _ = tmux::warp(&origin);
+            }
         }
     } else {
         // Save origin and jump to dashboard
