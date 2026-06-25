@@ -2,20 +2,32 @@
   "hooks": {
     "UserPromptSubmit": [
       {
-        "type": "command",
-        "command": "agentq status RUNNING --type claude 2>/dev/null || true"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentq status RUNNING --type claude 2>/dev/null || true"
+          }
+        ]
       }
     ],
     "Notification": [
       {
-        "type": "command",
-        "command": "agentq status WAITING_APPROVAL --type claude 2>/dev/null || true"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentq status WAITING_APPROVAL --type claude 2>/dev/null || true"
+          }
+        ]
       }
     ],
     "Stop": [
       {
-        "type": "command",
-        "command": "agentq status IDLE --type claude 2>/dev/null || true"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentq status IDLE --type claude 2>/dev/null || true"
+          }
+        ]
       }
     ]
   }

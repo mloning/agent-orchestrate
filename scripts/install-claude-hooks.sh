@@ -108,14 +108,18 @@ fi
 log "agentq   : $AGENTQ_BIN"
 
 # --- build the hooks we own ------------------------------------------------
+# Claude requires the nested `{ "hooks": [ { type, command } ] }` shape for these
+# events — a flat `{ type, command }` entry is rejected by the settings schema.
+# The matcher is omitted (optional and silently ignored for non-tool events
+# UserPromptSubmit/Notification/Stop).
 # Each command is fire-and-forget: `2>/dev/null || true` means a missing or
 # failing agentq exits 0 with no output, so it can never block or clutter the
 # agent (a Claude hook only blocks on exit code 2). The binary path is quoted
 # so a path with spaces still runs; --type tags the pane's agent kind.
 HOOKS="$(jq -n --arg bin "$AGENTQ_BIN" '
   def cmd($st):
-    { type: "command",
-      command: ("\"" + $bin + "\" status " + $st + " --type claude 2>/dev/null || true") };
+    { hooks: [ { type: "command",
+                 command: ("\"" + $bin + "\" status " + $st + " --type claude 2>/dev/null || true") } ] };
   {
     UserPromptSubmit: [ cmd("RUNNING") ],
     Notification:     [ cmd("WAITING_APPROVAL") ],
@@ -133,14 +137,16 @@ fi
 
 # --- merge (replace our prior hooks, keep everything else) ------------------
 # Idempotent across command-format changes: for each event we drop any existing
-# entry that looks like an agentq status hook, then append the current one. So
-# re-running (even after upgrading the command shape) converges to exactly one
-# of ours per event and never touches the user's unrelated hooks.
+# entry that looks like an agentq status hook — whether stored flat
+# ({type,command}) or nested ({hooks:[{command}]}) — then append the current one.
+# So re-running converges to exactly one of ours per event, repairs a prior
+# flat-format install, and never touches the user's unrelated hooks.
 merged="$(printf '%s' "$current" | jq --argjson snip "$HOOKS" '
   def is_ours:
-    (.command // "") as $c
-    | ($c | test("agentq")) and
-      ($c | test("status (RUNNING|WAITING_APPROVAL|WAITING_INPUT|IDLE|CRASHED|STALLED)"));
+    [ (.command // empty), ((.hooks // [])[] | .command // empty) ]
+    | any(. as $c
+          | ($c | test("agentq"))
+            and ($c | test("status (RUNNING|WAITING_APPROVAL|WAITING_INPUT|IDLE|CRASHED|STALLED)")));
   .hooks = (.hooks // {})
   | reduce ($snip | to_entries[]) as $e (.;
       .hooks[$e.key] = ((((.hooks[$e.key]) // []) | map(select(is_ours | not))) + $e.value))
@@ -181,7 +187,8 @@ for pair in "UserPromptSubmit:status RUNNING" \
             "Stop:status IDLE"; do
   ev="${pair%%:*}"; needle="${pair#*:}"
   if ! jq -e --arg ev "$ev" --arg n "$needle" \
-        '(.hooks[$ev] // []) | any(.command | contains($n))' "$REAL" >/dev/null; then
+        'def cmds: (.command // empty), ((.hooks // [])[] | .command // empty);
+         [ (.hooks[$ev] // [])[] | cmds ] | any(contains($n))' "$REAL" >/dev/null; then
     warn "expected hook missing for $ev"
     ok=0
   fi
