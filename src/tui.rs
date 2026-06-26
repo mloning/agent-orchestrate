@@ -372,7 +372,7 @@ fn render_body(f: &mut Frame, app: &mut App, area: Rect) {
 fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     let now = model::now_unix_secs();
 
-    let header = Row::new(["TYPE", "STATE", "LOCATION", "AGE", "MESSAGE"])
+    let header = Row::new(["TYPE", "STATE", "TOPIC", "LOCATION", "AGE", "MESSAGE"])
         .style(Style::default().add_modifier(Modifier::BOLD));
 
     let rows = app.agents.iter().map(|a| {
@@ -381,9 +381,17 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         if a.status.is_attention() {
             state_style = state_style.add_modifier(Modifier::BOLD);
         }
+        // TOPIC is the stable session label; show a dim placeholder until the
+        // summarizer has filled it in (or for agents that never summarize).
+        let (topic, topic_style) = if a.topic.is_empty() {
+            ("…".to_string(), Style::default().fg(Color::DarkGray))
+        } else {
+            (a.topic.clone(), Style::default())
+        };
         Row::new(vec![
             Cell::from(a.agent_type.clone()),
             Cell::from(a.status.label()).style(state_style),
+            Cell::from(topic).style(topic_style),
             Cell::from(a.location.clone()),
             Cell::from(age),
             Cell::from(a.message.clone()).style(Style::default().fg(Color::Gray)),
@@ -393,9 +401,10 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     let widths = [
         Constraint::Length(7),  // TYPE (claude/codex/gemini)
         Constraint::Length(20), // STATE ("Waiting for approval" = 20)
-        Constraint::Length(32), // LOCATION (session:window) — 2× the old 16
+        Constraint::Length(28), // TOPIC — stable 3-5 word session label
+        Constraint::Length(24), // LOCATION (session:window)
         Constraint::Length(7),  // AGE ("<1 min", "59 min")
-        Constraint::Length(20), // MESSAGE — fixed, narrower
+        Constraint::Length(18), // MESSAGE — transient, narrower
     ];
 
     let table = Table::new(rows, widths)

@@ -112,9 +112,16 @@ HOOKS="$(jq -n --arg bin "$AGENTQ_BIN" '
     { matcher: "*",
       hooks: [ { name: "agentq", type: "command",
                  command: ("\"" + $bin + "\" clear 2>/dev/null || true") } ] };
+  # Turn-end topic summary. Fast + non-blocking: `agentq summarize` spawns a
+  # detached worker (`claude -p`) and returns at once, computing the pane`s
+  # stable @agent_topic once per session.
+  def summarize_cmd:
+    { matcher: "*",
+      hooks: [ { name: "agentq", type: "command",
+                 command: ("\"" + $bin + "\" summarize --type gemini 2>/dev/null || true") } ] };
   {
     BeforeAgent: [ cmd("RUNNING") ],
-    AfterAgent:  [ cmd("IDLE") ],
+    AfterAgent:  [ cmd("IDLE"), summarize_cmd ],
     SessionEnd:  [ clear_cmd ]
   }')"
 
@@ -133,7 +140,7 @@ merged="$(printf '%s' "$current" | jq --argjson snip "$HOOKS" '
     [ (.command // empty), ((.hooks // [])[] | .command // empty) ]
     | any(. as $c
           | ($c | test("agentq"))
-            and ($c | test("status (RUNNING|WAITING_APPROVAL|WAITING_INPUT|IDLE|CRASHED|STALLED)|\\bclear\\b")));
+            and ($c | test("status (RUNNING|WAITING_APPROVAL|WAITING_INPUT|IDLE|CRASHED|STALLED)|\\bclear\\b|\\bsummarize\\b")));
   .hooks = (.hooks // {})
   | .hooks |= with_entries(.value |= map(select(is_ours | not)))
   | reduce ($snip | to_entries[]) as $e (.;
@@ -173,6 +180,7 @@ trap - EXIT
 ok=1
 for pair in "BeforeAgent:status RUNNING" \
             "AfterAgent:status IDLE" \
+            "AfterAgent:summarize" \
             "SessionEnd:clear"; do
   ev="${pair%%:*}"; needle="${pair#*:}"
   if ! jq -e --arg ev "$ev" --arg n "$needle" \

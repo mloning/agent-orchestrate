@@ -30,6 +30,14 @@
             "command": "agentq status IDLE --type codex 2>/dev/null || true"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentq summarize --type codex 2>/dev/null || true"
+          }
+        ]
       }
     ]
   }

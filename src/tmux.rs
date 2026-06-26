@@ -64,6 +64,20 @@ fn sanitize(s: &str) -> String {
     s.replace(['\t', '\n', '\r'], " ")
 }
 
+/// Set the stable per-pane topic (`@agent_topic`). Kept separate from
+/// `set_status` so the topic persists untouched across the frequent status
+/// churn — it is written once by the summarizer and read on every refresh.
+pub fn set_topic(pane: &str, topic: &str) -> Result<()> {
+    let topic = sanitize(topic);
+    run_tmux(&["set-option", "-t", pane, "-p", "@agent_topic", &topic])
+}
+
+/// Read a single pane-scoped option's value, or empty string if unset/missing.
+/// `-q` keeps an unset option from erroring; we treat any failure as "unset".
+pub fn get_pane_option(pane: &str, key: &str) -> String {
+    run_tmux_output(&["show-options", "-pqv", "-t", pane, key]).unwrap_or_default()
+}
+
 /// Unset all agent options on a pane (`-u`), so `list_panes` no longer returns
 /// it — i.e. remove the agent from the dashboard. Used by `agentq clear` (the
 /// SessionEnd hook) and the TUI's manual clear.
@@ -72,7 +86,8 @@ pub fn clear_status(pane: &str) -> Result<()> {
         "set-option", "-u", "-p", "-t", pane, "@agent_status", ";",
         "set-option", "-u", "-p", "-t", pane, "@agent_msg", ";",
         "set-option", "-u", "-p", "-t", pane, "@agent_updated", ";",
-        "set-option", "-u", "-p", "-t", pane, "@agent_type",
+        "set-option", "-u", "-p", "-t", pane, "@agent_type", ";",
+        "set-option", "-u", "-p", "-t", pane, "@agent_topic",
     ])
 }
 
@@ -80,7 +95,7 @@ pub fn clear_status(pane: &str) -> Result<()> {
 pub fn list_panes() -> Vec<Agent> {
     // FR2: location is reported as `session:window`. The pane id (first field)
     // remains the unique key used for warp/send.
-    let format = "#{pane_id}\t#{@agent_status}\t#{session_name}:#{window_index}\t#{@agent_type}\t#{@agent_updated}\t#{@agent_msg}";
+    let format = "#{pane_id}\t#{@agent_status}\t#{session_name}:#{window_index}\t#{@agent_type}\t#{@agent_updated}\t#{@agent_msg}\t#{@agent_topic}";
     let output = match run_tmux_output(&["list-panes", "-a", "-F", format]) {
         Ok(o) => o,
         Err(_) => return Vec::new(),

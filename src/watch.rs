@@ -17,6 +17,13 @@ const INTERVAL: Duration = Duration::from_secs(25);
 const STALL_SECS: u64 = 600; // 10 minutes
 /// Lines of pane tail to scrape for crash/plan signatures.
 const CAPTURE_LINES: u32 = 40;
+/// Bottom-most lines treated as the pane's LIVE region. Both the plan-prompt
+/// box and the working-spinner footer are pinned to the bottom of the screen;
+/// once superseded they scroll up out of this window (but stay in the wider
+/// `CAPTURE_LINES` scrollback). Scoping detection to the live region is what
+/// keeps a marker left in scrollback from re-triggering — the bug where a
+/// resumed agent snapped back to WAITING_APPROVAL.
+const LIVE_REGION_LINES: usize = 8;
 
 // --- Signatures (heuristic; tune to keep false positives rare, NFR7) -------
 
@@ -60,6 +67,21 @@ const PLAN_PROMPT_MARKERS: &[&str] = &[
     "Ready to code?",
     "keep planning",
 ];
+
+/// Sentinel message stamped on a watcher-driven plan wait. It doubles as the
+/// discriminator for the plan auto-resume below: the watcher resumes a plan wait
+/// purely on the prompt disappearing, which is only safe for the waits IT
+/// created (a real `PermissionRequest` wait carries the project name and must
+/// stay until the human answers it).
+const PLAN_APPROVAL_MSG: &str = "plan approval";
+
+/// "Actively working" footer markers — the interrupt hint agents render only
+/// while a turn is running, never while a prompt awaits input. Matched
+/// case-insensitively so both Claude's `esc to interrupt` and Codex's
+/// `Esc to interrupt` count. This is the signal used to resume a stale
+/// approval wait answered in the agent's own pane (tool-permission approvals
+/// fire no "granted" hook). Tune here if an agent's wording differs.
+const WORKING_MARKERS: &[&str] = &["esc to interrupt"];
 
 // ---------------------------------------------------------------------------
 
@@ -119,17 +141,50 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
             continue;
         }
 
-        // Recover the Claude plan-approval gap (no hook fires).
+        // Raise the Claude plan-approval gap: it fires no hook (issue #19283;
+        // OQ-3 default yes), so the watcher detects it from the on-screen prompt.
+        // Detection is scoped to the LIVE region (`is_active_plan_prompt`) so an
+        // answered prompt lingering in scrollback never re-triggers — the bug
+        // where a resumed agent snapped back to WAITING_APPROVAL.
         if agent.agent_type == "claude"
             && agent.status != Status::WaitingApproval
-            && is_plan_prompt(&tail)
+            && is_active_plan_prompt(&tail)
         {
             log(&format!(
                 "WAITING_APPROVAL {} ({}, {}) — plan-approval prompt",
                 agent.pane_id, agent.agent_type, agent.location
             ));
-            let _ = set(agent, Status::WaitingApproval, "plan approval", now);
+            let _ = set(agent, Status::WaitingApproval, PLAN_APPROVAL_MSG, now);
             continue;
+        }
+
+        // Resume a stale approval wait. Neither a plan approval nor a tool
+        // permission fires a "granted" hook, so a prompt answered in the agent's
+        // own pane would otherwise sit at WAITING_APPROVAL until the turn ends.
+        // Two safe signals, both confined to the LIVE region so a marker left in
+        // scrollback can't fire a false resume:
+        //   - the agent is visibly working again (interrupt-hint footer), or
+        //   - a watcher-raised plan wait (sentinel msg) whose prompt is now gone.
+        // Conservatively gated (NFR7, and the #1 goal of never hiding a real
+        // prompt): the interrupt hint shows only while working — never while a
+        // prompt is up — so the failure direction is a missed resume, not a
+        // missed prompt. A real PermissionRequest wait still showing its prompt
+        // matches neither signal and stays put.
+        if agent.status == Status::WaitingApproval {
+            let working = looks_working(&tail);
+            let answered_plan = agent.message == PLAN_APPROVAL_MSG
+                && !is_active_plan_prompt(&tail);
+            if working || answered_plan {
+                log(&format!(
+                    "RUNNING {} ({}, {}) — approval answered ({})",
+                    agent.pane_id,
+                    agent.agent_type,
+                    agent.location,
+                    if working { "agent working" } else { "plan prompt gone" }
+                ));
+                let _ = set(agent, Status::Running, "resumed", now);
+                continue;
+            }
         }
 
         // Stall: RUNNING with no output change past the threshold. Keyed on the
@@ -188,6 +243,28 @@ fn looks_like_bare_shell(tail: &str) -> bool {
 
 fn is_plan_prompt(tail: &str) -> bool {
     PLAN_PROMPT_MARKERS.iter().any(|m| tail.contains(m))
+}
+
+/// True only when a plan prompt is the LIVE prompt — its markers appear in the
+/// bottom `LIVE_REGION_LINES` of the capture. An answered prompt has fresh agent
+/// output below it, so its markers fall outside this window and read as inactive.
+fn is_active_plan_prompt(tail: &str) -> bool {
+    is_plan_prompt(&live_region(tail))
+}
+
+/// True when the agent's live footer shows it is actively processing a turn (the
+/// interrupt hint). Scoped to the LIVE region and matched case-insensitively;
+/// used to resume an approval wait answered in the agent's own pane.
+fn looks_working(tail: &str) -> bool {
+    let region = live_region(tail).to_ascii_lowercase();
+    WORKING_MARKERS.iter().any(|m| region.contains(m))
+}
+
+/// The bottom `LIVE_REGION_LINES` of a capture, joined back into one string.
+fn live_region(tail: &str) -> String {
+    let lines: Vec<&str> = tail.lines().collect();
+    let start = lines.len().saturating_sub(LIVE_REGION_LINES);
+    lines[start..].join("\n")
 }
 
 fn set(agent: &Agent, status: Status, msg: &str, now: u64) -> Result<()> {
@@ -258,5 +335,51 @@ mod tests {
     fn detects_plan_prompt() {
         assert!(is_plan_prompt("Here is the plan.\n\nWould you like to proceed?"));
         assert!(!is_plan_prompt("just some normal output"));
+    }
+
+    #[test]
+    fn active_plan_prompt_detected_when_box_is_at_bottom() {
+        // Unanswered: the interactive box is pinned to the bottom of the pane.
+        let tail = "earlier output\n\
+                    ╭─ plan ─╮\n\
+                    │ Ready to code?\n\
+                    │ ❯ 1. Yes\n\
+                    │   2. No, keep planning\n\
+                    ╰────────╯";
+        assert!(is_active_plan_prompt(tail));
+    }
+
+    #[test]
+    fn answered_plan_prompt_in_scrollback_is_not_active() {
+        // The prompt was answered and the agent resumed; the markers have
+        // scrolled up out of the live region even though they remain in the
+        // wider capture. This is the regression that caused a running agent to
+        // snap back to WAITING_APPROVAL.
+        let mut lines = vec!["Ready to code?", "❯ 1. Yes", "  2. No, keep planning"];
+        for _ in 0..LIVE_REGION_LINES {
+            lines.push("⏺ working on the plan…");
+        }
+        let tail = lines.join("\n");
+        assert!(is_plan_prompt(&tail)); // still present in the full capture
+        assert!(!is_active_plan_prompt(&tail)); // …but no longer the live prompt
+    }
+
+    #[test]
+    fn working_footer_signals_active_turn() {
+        // Claude and Codex interrupt-hint footers, matched case-insensitively.
+        assert!(looks_working("⏺ Editing files…\n  ✻ Cogitating (12s · esc to interrupt)"));
+        assert!(looks_working("working\n  Press Esc to interrupt"));
+        assert!(!looks_working("idle\n> "));
+    }
+
+    #[test]
+    fn working_hint_in_scrollback_does_not_signal() {
+        // The hint scrolled up out of the live footer (e.g. a prompt is now up);
+        // it must not read as working.
+        let mut lines = vec!["esc to interrupt"];
+        for _ in 0..LIVE_REGION_LINES {
+            lines.push("Do you want to proceed?");
+        }
+        assert!(!looks_working(&lines.join("\n")));
     }
 }

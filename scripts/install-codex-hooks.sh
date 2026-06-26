@@ -125,10 +125,16 @@ HOOKS="$(jq -n --arg bin "$AGENTQ_BIN" '
   def cmd($st):
     { hooks: [ { type: "command",
                  command: ("\"" + $bin + "\" status " + $st + " --type codex 2>/dev/null || true") } ] };
+  # Turn-end topic summary. Fast + non-blocking: `agentq summarize` spawns a
+  # detached worker (`claude -p`) and returns at once, computing the pane`s
+  # stable @agent_topic once per session.
+  def summarize_cmd:
+    { hooks: [ { type: "command",
+                 command: ("\"" + $bin + "\" summarize --type codex 2>/dev/null || true") } ] };
   {
     UserPromptSubmit:  [ cmd("RUNNING") ],
     PermissionRequest: [ ({ matcher: "" } + cmd("WAITING_APPROVAL")) ],
-    Stop:              [ cmd("IDLE") ]
+    Stop:              [ cmd("IDLE"), summarize_cmd ]
   }')"
 
 # --- read + validate current hooks file ------------------------------------
@@ -149,7 +155,7 @@ merged="$(printf '%s' "$current" | jq --argjson snip "$HOOKS" '
     [ (.command // empty), ((.hooks // [])[] | .command // empty) ]
     | any(. as $c
           | ($c | test("agentq"))
-            and ($c | test("status (RUNNING|WAITING_APPROVAL|WAITING_INPUT|IDLE|CRASHED|STALLED)|\\bclear\\b")));
+            and ($c | test("status (RUNNING|WAITING_APPROVAL|WAITING_INPUT|IDLE|CRASHED|STALLED)|\\bclear\\b|\\bsummarize\\b")));
   .hooks = (.hooks // {})
   | .hooks |= with_entries(.value |= map(select(is_ours | not)))
   | reduce ($snip | to_entries[]) as $e (.;
@@ -189,7 +195,8 @@ trap - EXIT
 ok=1
 for pair in "UserPromptSubmit:status RUNNING" \
             "PermissionRequest:status WAITING_APPROVAL" \
-            "Stop:status IDLE"; do
+            "Stop:status IDLE" \
+            "Stop:summarize"; do
   ev="${pair%%:*}"; needle="${pair#*:}"
   if ! jq -e --arg ev "$ev" --arg n "$needle" \
         'def cmds: (.command // empty), ((.hooks // [])[] | .command // empty);

@@ -15,6 +15,12 @@
         "hooks": [
           { "name": "agentq", "type": "command", "command": "agentq status IDLE --type gemini 2>/dev/null || true" }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          { "name": "agentq", "type": "command", "command": "agentq summarize --type gemini 2>/dev/null || true" }
+        ]
       }
     ],
     "SessionEnd": [

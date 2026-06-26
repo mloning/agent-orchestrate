@@ -26,3 +26,10 @@ command = "agentq status WAITING_APPROVAL --type codex 2>/dev/null || true"
 [[hooks.Stop.hooks]]
 type = "command"
 command = "agentq status IDLE --type codex 2>/dev/null || true"
+
+# Turn-end topic summary: `agentq summarize` spawns a detached `claude -p` worker
+# and returns at once, computing the pane's stable @agent_topic once per session.
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "agentq summarize --type codex 2>/dev/null || true"

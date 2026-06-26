@@ -132,6 +132,10 @@ pub struct Agent {
     pub location: String,
     pub updated: u64,
     pub message: String,
+    /// Stable 3-5 word topic of the session (`@agent_topic`), computed once by
+    /// the summarizer. Distinct from `message`, which churns with every hook.
+    /// Empty until the summarizer has run (or for agents that never summarize).
+    pub topic: String,
 }
 
 impl Eq for Agent {}
@@ -162,11 +166,14 @@ impl PartialOrd for Agent {
 // ---------------------------------------------------------------------------
 
 /// Parse a tab-separated pane line:
-/// `pane_id\tstatus\tlocation\tagent_type\tupdated\tmessage`
+/// `pane_id\tstatus\tlocation\tagent_type\tupdated\tmessage\ttopic`
+///
+/// `message` and everything before it are single, tab-free fields (values are
+/// sanitized on write); `topic` is last and absorbs any trailing tabs.
 ///
 /// Returns `None` if the status field is empty or unparseable.
 pub fn parse_pane_line(line: &str) -> Option<Agent> {
-    let fields: Vec<&str> = line.splitn(6, '\t').collect();
+    let fields: Vec<&str> = line.splitn(7, '\t').collect();
     if fields.len() < 5 {
         return None;
     }
@@ -178,7 +185,8 @@ pub fn parse_pane_line(line: &str) -> Option<Agent> {
 
     let status: Status = raw_status.parse().ok()?;
     let updated: u64 = fields[4].parse().unwrap_or(0);
-    let message = if fields.len() > 5 { fields[5] } else { "" };
+    let message = fields.get(5).copied().unwrap_or("");
+    let topic = fields.get(6).copied().unwrap_or("");
 
     Some(Agent {
         pane_id: fields[0].to_string(),
@@ -187,6 +195,7 @@ pub fn parse_pane_line(line: &str) -> Option<Agent> {
         location: fields[2].to_string(),
         updated,
         message: message.to_string(),
+        topic: topic.to_string(),
     })
 }
 
@@ -202,12 +211,13 @@ mod tests {
             location: "work:0".into(),
             updated,
             message: String::new(),
+            topic: String::new(),
         }
     }
 
     #[test]
     fn parses_full_line() {
-        let line = "%3\tWAITING_APPROVAL\twork:1\tcodex\t1700\trun tests?";
+        let line = "%3\tWAITING_APPROVAL\twork:1\tcodex\t1700\trun tests?\tagentq topic column";
         let a = parse_pane_line(line).expect("should parse");
         assert_eq!(a.pane_id, "%3");
         assert_eq!(a.status, Status::WaitingApproval);
@@ -215,21 +225,32 @@ mod tests {
         assert_eq!(a.agent_type, "codex");
         assert_eq!(a.updated, 1700);
         assert_eq!(a.message, "run tests?");
+        assert_eq!(a.topic, "agentq topic column");
     }
 
     #[test]
-    fn message_may_contain_tabs() {
-        // splitn(6) keeps everything after the 5th tab in the message field.
-        let a = parse_pane_line("%1\tRUNNING\tw:0\tclaude\t10\ta\tb").unwrap();
-        assert_eq!(a.message, "a\tb");
+    fn topic_absorbs_trailing_tabs() {
+        // topic is the last field (splitn(7)), so any stray tab past it stays
+        // with the topic rather than spilling into a new column.
+        let a = parse_pane_line("%1\tRUNNING\tw:0\tclaude\t10\tmsg\ta\tb").unwrap();
+        assert_eq!(a.message, "msg");
+        assert_eq!(a.topic, "a\tb");
+    }
+
+    #[test]
+    fn missing_topic_is_empty() {
+        // An older/unset @agent_topic just yields an empty topic, not a drop.
+        let a = parse_pane_line("%1\tRUNNING\tw:0\tclaude\t10\tmsg").unwrap();
+        assert_eq!(a.message, "msg");
+        assert_eq!(a.topic, "");
     }
 
     #[test]
     fn drops_unregistered_and_unknown() {
         // empty @agent_status (pane never fired a hook)
-        assert!(parse_pane_line("%1\t\tw:0\tclaude\t10\t").is_none());
+        assert!(parse_pane_line("%1\t\tw:0\tclaude\t10\t\t").is_none());
         // unparseable status
-        assert!(parse_pane_line("%1\tBOGUS\tw:0\tclaude\t10\t").is_none());
+        assert!(parse_pane_line("%1\tBOGUS\tw:0\tclaude\t10\t\t").is_none());
     }
 
     #[test]

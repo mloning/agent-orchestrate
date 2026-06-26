@@ -29,6 +29,14 @@
             "command": "agentq status IDLE --type claude 2>/dev/null || true"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentq summarize --type claude 2>/dev/null || true"
+          }
+        ]
       }
     ],
     "SessionEnd": [
