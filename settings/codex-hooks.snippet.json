@@ -1,0 +1,36 @@
+{
+  "_comment": "Codex CLI hooks — merge into ~/.codex/hooks.json (auto-discovered next to config.toml). The `hooks` feature is stable/on by default. Non-managed hooks require a trust review on the next `codex` launch. Prefer the installer: scripts/install-codex-hooks.sh",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentq status RUNNING --type codex 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentq status WAITING_APPROVAL --type codex 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentq status IDLE --type codex 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

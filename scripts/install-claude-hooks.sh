@@ -116,14 +116,21 @@ log "agentq   : $AGENTQ_BIN"
 # failing agentq exits 0 with no output, so it can never block or clutter the
 # agent (a Claude hook only blocks on exit code 2). The binary path is quoted
 # so a path with spaces still runs; --type tags the pane's agent kind.
+# SessionEnd -> `agentq clear` removes the pane from the dashboard when the agent
+# exits, so a quit agent doesn't linger as a stale row (its pane lives on as a
+# shell, keeping the @agent_* options until they're unset).
 HOOKS="$(jq -n --arg bin "$AGENTQ_BIN" '
   def cmd($st):
     { hooks: [ { type: "command",
                  command: ("\"" + $bin + "\" status " + $st + " --type claude 2>/dev/null || true") } ] };
+  def clear_cmd:
+    { hooks: [ { type: "command",
+                 command: ("\"" + $bin + "\" clear 2>/dev/null || true") } ] };
   {
-    UserPromptSubmit: [ cmd("RUNNING") ],
-    Notification:     [ cmd("WAITING_APPROVAL") ],
-    Stop:             [ cmd("IDLE") ]
+    UserPromptSubmit:  [ cmd("RUNNING") ],
+    PermissionRequest: [ ({ matcher: "" } + cmd("WAITING_APPROVAL")) ],
+    Stop:              [ cmd("IDLE") ],
+    SessionEnd:        [ clear_cmd ]
   }')"
 
 # --- read + validate current settings --------------------------------------
@@ -135,21 +142,23 @@ else
   current='{}'
 fi
 
-# --- merge (replace our prior hooks, keep everything else) ------------------
-# Idempotent across command-format changes: for each event we drop any existing
-# entry that looks like an agentq status hook — whether stored flat
-# ({type,command}) or nested ({hooks:[{command}]}) — then append the current one.
-# So re-running converges to exactly one of ours per event, repairs a prior
-# flat-format install, and never touches the user's unrelated hooks.
+# --- merge (reconcile our hooks, keep everything else) ----------------------
+# Strip every agentq hook from ALL events first (whether stored flat
+# {type,command} or nested {hooks:[{command}]}), then add the current snippet's
+# and drop any now-empty event. This is idempotent, repairs a prior flat-format
+# install, AND cleans up hooks under events we no longer use (e.g. a previous
+# Notification mapping) — while never touching the user's unrelated hooks.
 merged="$(printf '%s' "$current" | jq --argjson snip "$HOOKS" '
   def is_ours:
     [ (.command // empty), ((.hooks // [])[] | .command // empty) ]
     | any(. as $c
           | ($c | test("agentq"))
-            and ($c | test("status (RUNNING|WAITING_APPROVAL|WAITING_INPUT|IDLE|CRASHED|STALLED)")));
+            and ($c | test("status (RUNNING|WAITING_APPROVAL|WAITING_INPUT|IDLE|CRASHED|STALLED)|\\bclear\\b")));
   .hooks = (.hooks // {})
+  | .hooks |= with_entries(.value |= map(select(is_ours | not)))
   | reduce ($snip | to_entries[]) as $e (.;
-      .hooks[$e.key] = ((((.hooks[$e.key]) // []) | map(select(is_ours | not))) + $e.value))
+      .hooks[$e.key] = ((.hooks[$e.key] // []) + $e.value))
+  | .hooks |= with_entries(select((.value | length) > 0))
 ')"
 
 # --- dry run ---------------------------------------------------------------
@@ -183,8 +192,9 @@ trap - EXIT
 # --- verify ----------------------------------------------------------------
 ok=1
 for pair in "UserPromptSubmit:status RUNNING" \
-            "Notification:status WAITING_APPROVAL" \
-            "Stop:status IDLE"; do
+            "PermissionRequest:status WAITING_APPROVAL" \
+            "Stop:status IDLE" \
+            "SessionEnd:clear"; do
   ev="${pair%%:*}"; needle="${pair#*:}"
   if ! jq -e --arg ev "$ev" --arg n "$needle" \
         'def cmds: (.command // empty), ((.hooks // [])[] | .command // empty);
@@ -193,5 +203,5 @@ for pair in "UserPromptSubmit:status RUNNING" \
     ok=0
   fi
 done
-[ "$ok" -eq 1 ] && log "hooks installed for UserPromptSubmit, Notification, Stop."
+[ "$ok" -eq 1 ] && log "hooks installed for UserPromptSubmit, PermissionRequest, Stop, SessionEnd."
 log "done — open Claude Code and run /hooks to confirm the merge."

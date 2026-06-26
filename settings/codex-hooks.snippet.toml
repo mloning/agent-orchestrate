@@ -1,17 +1,28 @@
-# Codex CLI hook configuration
-# Merge into ~/.codex/config.toml
+# Codex CLI hooks — inline TOML form, merge into ~/.codex/config.toml.
 #
-# Requires: [features] hooks = true
-# and trust configuration for the hook commands.
+# Prefer the installer (scripts/install-codex-hooks.sh) which writes the
+# equivalent ~/.codex/hooks.json. This inline form is the alternative for people
+# who keep everything in config.toml. Codex loads BOTH a hooks.json and inline
+# [hooks] tables in the same layer and warns — use only one representation.
+#
+# The `hooks` feature is stable and on by default. Non-managed hooks require a
+# trust review on the next `codex` launch, or they won't run.
+#
+# Note the array-of-tables shape: each event is `[[hooks.<Event>]]` with a
+# nested `[[hooks.<Event>.hooks]]` handler (matcher optional for these events).
+# `--type` tags the agent kind; `2>/dev/null || true` keeps it fire-and-forget.
 
-# `--type codex` tags the pane's agent kind. The trailing `2>/dev/null || true`
-# makes the hook fire-and-forget so a missing/failing agentq never disturbs the
-# agent — this assumes Codex runs the command via a shell; drop it if Codex uses
-# exec form (in which case the redirect/`||` would be passed as literal args).
-[hooks.PermissionRequest]
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "agentq status RUNNING --type codex 2>/dev/null || true"
+
+[[hooks.PermissionRequest]]
+[[hooks.PermissionRequest.hooks]]
 type = "command"
 command = "agentq status WAITING_APPROVAL --type codex 2>/dev/null || true"
 
-[hooks.Stop]
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
 type = "command"
 command = "agentq status IDLE --type codex 2>/dev/null || true"

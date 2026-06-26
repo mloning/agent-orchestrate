@@ -28,8 +28,10 @@ source-file ~/Dev/projects/agent-orchestrate/tmux/agent-orchestrate.conf
 scripts/install-claude-hooks.sh --dry-run
 scripts/install-claude-hooks.sh
 
-# Wire Codex hooks (merge into ~/.codex/config.toml by hand for now)
-# See settings/codex-hooks.snippet.toml
+# Wire Codex hooks — merges into ~/.codex/hooks.json (same safety guarantees):
+scripts/install-codex-hooks.sh --dry-run
+scripts/install-codex-hooks.sh
+# Then start Codex and approve the hook-trust review, or the hooks won't run.
 ```
 
 The hook commands pass the agent kind with `--type` and use the absolute `agentq`
@@ -51,7 +53,8 @@ agentq open
 #   n              — deny (sends n⏎ to agent)
 #   r              — reply with free-text (guarded for non-waiting agents)
 #   Enter          — warp to agent's exact pane
-#   d              — toggle detail pane (captured output)
+#   x              — clear the selected agent from the dashboard (stale rows)
+#   d              — toggle the live session preview (bottom half, on by default)
 #   q              — return to previous pane
 
 # Manually set agent status (used by hooks, not typically called directly)
@@ -71,8 +74,15 @@ prefix+i  →  agentq open  →  toggle between work and dashboard session
 ```
 
 **tmux IS the database.** Agent state is stored as tmux pane user-options (`@agent_status`,
-`@agent_type`, `@agent_msg`, `@agent_updated`). When a pane dies, its state auto-cleans.
-No SQLite, no separate daemon, no external state.
+`@agent_type`, `@agent_msg`, `@agent_updated`). No SQLite, no separate daemon, no external state.
+
+**How agents are cleared.** A row disappears when its pane's options are gone. That happens
+three ways: (1) the pane is destroyed (tmux drops its options); (2) the agent exits and runs
+`agentq clear` — Claude via its `SessionEnd` hook, Codex via a fish wrapper the installer drops
+in (`~/.config/fish/conf.d/agentq-codex.fish`, since Codex has no session-end hook) that clears
+the pane when an interactive `codex` exits; (3) you press `x` in the dashboard to clear a row
+manually. The `watch` crash detector is the backstop for hard kills. A still-live agent that
+gets cleared re-registers on its next hook.
 
 ## Subcommands
 

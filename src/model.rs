@@ -17,12 +17,13 @@ pub fn now_unix_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Render an elapsed duration (seconds) compactly: `12s`, `3m`, `1h`, `2d`.
+/// Render an elapsed duration at minute granularity (no ticking seconds clock):
+/// `<1 min`, `1 min`, `2 min`, then `1h`, `2h`, `1d`, `2d`.
 pub fn humanize_age(secs: u64) -> String {
     if secs < 60 {
-        format!("{secs}s")
+        "<1 min".to_string()
     } else if secs < 3600 {
-        format!("{}m", secs / 60)
+        format!("{} min", secs / 60)
     } else if secs < 86_400 {
         format!("{}h", secs / 3600)
     } else {
@@ -83,6 +84,19 @@ impl Status {
             Status::WaitingInput => 2,
             Status::Running => 3,
             Status::Idle => 4,
+        }
+    }
+
+    /// Human-friendly label for the dashboard. Distinct from `Display`, which
+    /// stays the canonical SCREAMING form used for storage and parsing.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Status::Crashed => "Crashed",
+            Status::Stalled => "Stalled",
+            Status::WaitingApproval => "Waiting for approval",
+            Status::WaitingInput => "Waiting for input",
+            Status::Running => "Running",
+            Status::Idle => "Idle",
         }
     }
 
@@ -251,8 +265,10 @@ mod tests {
 
     #[test]
     fn humanize_age_units() {
-        assert_eq!(humanize_age(5), "5s");
-        assert_eq!(humanize_age(125), "2m");
+        assert_eq!(humanize_age(5), "<1 min");
+        assert_eq!(humanize_age(59), "<1 min");
+        assert_eq!(humanize_age(60), "1 min");
+        assert_eq!(humanize_age(125), "2 min");
         assert_eq!(humanize_age(7200), "2h");
         assert_eq!(humanize_age(172_800), "2d");
     }

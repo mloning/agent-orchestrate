@@ -1,9 +1,11 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use ansi_to_tui::IntoText;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Text;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 use ratatui::{DefaultTerminal, Frame};
 
@@ -14,11 +16,11 @@ use crate::tmux;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// How long `event::poll` blocks before we loop to repaint / re-poll.
 const EVENT_TICK: Duration = Duration::from_millis(100);
-/// Lines of pane output to capture for the detail pane.
-const DETAIL_LINES: u32 = 200;
+/// Lines of pane output to capture for the preview pane.
+const PREVIEW_LINES: u32 = 200;
 
 const HELP: &str =
-    "j/k move · y approve · n deny · r reply · ⏎ warp · d detail · q back · ^C quit";
+    "j/k move · y approve · n deny · r reply · ⏎ warp · x clear · d preview · q back · ^C quit";
 
 /// Input mode for the dashboard. `Normal` is the default; the others drive the
 /// guarded free-text composer (FR7).
@@ -36,8 +38,8 @@ struct App {
     /// Pane id of the selected agent, tracked across refreshes so the cursor
     /// stays on the same agent even as the sorted list shifts.
     selected_pane: Option<String>,
-    show_detail: bool,
-    detail: String,
+    show_preview: bool,
+    preview: String,
     mode: Mode,
     /// Transient one-line feedback shown in the footer until the next action.
     flash: Option<String>,
@@ -51,8 +53,8 @@ impl App {
             agents: Vec::new(),
             table_state: TableState::new(),
             selected_pane: None,
-            show_detail: false,
-            detail: String::new(),
+            show_preview: true,
+            preview: String::new(),
             mode: Mode::Normal,
             flash: None,
             last_poll: Instant::now(),
@@ -62,11 +64,11 @@ impl App {
 
     // -- data ---------------------------------------------------------------
 
-    /// Re-read the fleet from tmux and reconcile selection + detail.
+    /// Re-read the fleet from tmux and reconcile selection + preview.
     fn refresh(&mut self) {
         self.agents = tmux::list_panes();
         self.sync_selection();
-        self.update_detail();
+        self.update_preview();
     }
 
     /// Keep the cursor on the same agent across refreshes; clamp otherwise.
@@ -94,14 +96,14 @@ impl App {
         self.table_state.selected().and_then(|i| self.agents.get(i))
     }
 
-    /// Refresh the captured tail for the detail pane (no-op when hidden).
-    fn update_detail(&mut self) {
-        if !self.show_detail {
+    /// Refresh the captured tail for the preview pane (no-op when hidden).
+    fn update_preview(&mut self) {
+        if !self.show_preview {
             return;
         }
         let pane = self.selected_agent().map(|a| a.pane_id.clone());
-        self.detail = match pane {
-            Some(p) => tmux::capture_pane(&p, DETAIL_LINES).unwrap_or_default(),
+        self.preview = match pane {
+            Some(p) => tmux::capture_pane_ansi(&p, PREVIEW_LINES).unwrap_or_default(),
             None => String::new(),
         };
     }
@@ -125,7 +127,7 @@ impl App {
         self.table_state.select(Some(idx));
         self.selected_pane = Some(self.agents[idx].pane_id.clone());
         self.flash = None;
-        self.update_detail();
+        self.update_preview();
     }
 
     // -- actions ------------------------------------------------------------
@@ -202,9 +204,24 @@ impl App {
         }
     }
 
-    fn toggle_detail(&mut self) {
-        self.show_detail = !self.show_detail;
-        self.update_detail();
+    fn toggle_preview(&mut self) {
+        self.show_preview = !self.show_preview;
+        self.update_preview();
+    }
+
+    /// Manually remove the selected agent from the dashboard (unset its pane
+    /// options). For stale rows whose agent exited without firing a clear hook
+    /// (e.g. Codex, which has no session-end event, or a hard kill). A still-
+    /// live agent re-registers on its next hook.
+    fn clear_selected(&mut self) {
+        let Some(agent) = self.selected_agent().cloned() else {
+            return;
+        };
+        self.flash = Some(match tmux::clear_status(&agent.pane_id) {
+            Ok(_) => format!("cleared {} ({})", agent.location, agent.pane_id),
+            Err(e) => format!("clear failed: {e}"),
+        });
+        self.refresh();
     }
 
     /// FR5: `q` returns to the summoning pane WITHOUT killing the dashboard, so
@@ -247,7 +264,8 @@ impl App {
             (KeyCode::Char('y'), _) => self.act_yes_no("y"),
             (KeyCode::Char('n'), _) => self.act_yes_no("n"),
             (KeyCode::Char('r'), _) => self.begin_reply(),
-            (KeyCode::Char('d'), _) => self.toggle_detail(),
+            (KeyCode::Char('x'), _) => self.clear_selected(),
+            (KeyCode::Char('d'), _) => self.toggle_preview(),
             (KeyCode::Enter, _) => self.warp_selected(),
             _ => {}
         }
@@ -332,18 +350,20 @@ fn render_body(f: &mut Frame, app: &mut App, area: Rect) {
             "No agents registered yet.\n\nStart an agent and trigger a hook (e.g. submit a prompt).",
         )
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title(" fleet "));
+        .block(Block::default().borders(Borders::ALL).title(" Agents "));
         f.render_widget(p, area);
         return;
     }
 
-    if app.show_detail {
-        let cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+    if app.show_preview {
+        // Fleet list on top, a live preview of the selected session in the
+        // bottom half, like tmux's session-switcher preview.
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(area);
-        render_table(f, app, cols[0]);
-        render_detail(f, app, cols[1]);
+        render_table(f, app, rows[0]);
+        render_preview(f, app, rows[1]);
     } else {
         render_table(f, app, area);
     }
@@ -363,7 +383,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         }
         Row::new(vec![
             Cell::from(a.agent_type.clone()),
-            Cell::from(a.status.to_string()).style(state_style),
+            Cell::from(a.status.label()).style(state_style),
             Cell::from(a.location.clone()),
             Cell::from(age),
             Cell::from(a.message.clone()).style(Style::default().fg(Color::Gray)),
@@ -372,30 +392,41 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
 
     let widths = [
         Constraint::Length(7),  // TYPE (claude/codex/gemini)
-        Constraint::Length(16), // STATE (WAITING_APPROVAL = 16)
+        Constraint::Length(20), // STATE ("Waiting for approval" = 20)
         Constraint::Length(16), // LOCATION (session:window)
-        Constraint::Length(5),  // AGE
+        Constraint::Length(7),  // AGE ("<1 min", "59 min")
         Constraint::Min(10),    // MESSAGE
     ];
 
     let table = Table::new(rows, widths)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title(" fleet "))
-        .row_highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .block(Block::default().borders(Borders::ALL).title(" Agents "))
+        // Subtle dark-gray bar rather than a full REVERSED (near-white) row; the
+        // `▌` marker already makes the selection obvious. Indexed(237) keeps the
+        // per-cell text colors readable (incl. the dim IDLE gray).
+        .row_highlight_style(Style::default().bg(Color::Indexed(237)))
         .highlight_symbol("▌ ");
 
     f.render_stateful_widget(table, area, &mut app.table_state);
 }
 
-fn render_detail(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" output ");
+fn render_preview(f: &mut Frame, app: &App, area: Rect) {
+    let title = match app.selected_agent() {
+        Some(a) => format!(" preview · {} · {} ", a.agent_type, a.location),
+        None => " preview ".to_string(),
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
     // Show the tail: keep only the last N captured lines that fit the box so
     // the freshest output is always visible without scroll bookkeeping.
     let inner_h = area.height.saturating_sub(2) as usize;
-    let lines: Vec<&str> = app.detail.lines().collect();
+    let lines: Vec<&str> = app.preview.lines().collect();
     let start = lines.len().saturating_sub(inner_h);
     let tail = lines[start..].join("\n");
-    f.render_widget(Paragraph::new(tail).block(block), area);
+    // The capture carries ANSI escapes (`capture-pane -e`); parse them into
+    // styled spans so the preview keeps the session's colors. Fall back to raw
+    // text if parsing fails.
+    let body = tail.into_text().unwrap_or_else(|_| Text::raw(tail.clone()));
+    f.render_widget(Paragraph::new(body).block(block), area);
 }
 
 fn render_footer(f: &mut Frame, app: &App, area: Rect) {

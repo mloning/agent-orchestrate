@@ -74,6 +74,11 @@ struct Obs {
 /// Crash / stall detection loop (FR9). Detection only — never registration
 /// (NG3): it acts solely on panes that already carry `@agent_status`.
 pub fn run() -> Result<()> {
+    log(&format!(
+        "started — scanning every {}s, stall after {}s",
+        INTERVAL.as_secs(),
+        STALL_SECS
+    ));
     let mut obs: HashMap<String, Obs> = HashMap::new();
     loop {
         scan_once(&mut obs);
@@ -81,9 +86,16 @@ pub fn run() -> Result<()> {
     }
 }
 
+/// Emit a line to stderr (unbuffered, so it shows promptly under `tail -f` and
+/// in the launchd log). Prefixed for easy grepping.
+fn log(msg: &str) {
+    eprintln!("[agentq watch] {msg}");
+}
+
 fn scan_once(obs: &mut HashMap<String, Obs>) {
     let now = model::now_unix_secs();
     let agents = tmux::list_panes();
+    log(&format!("scan: {} registered pane(s)", agents.len()));
 
     // Drop observations for panes that no longer exist (NFR5: self-cleaning).
     let live: HashSet<&str> = agents.iter().map(|a| a.pane_id.as_str()).collect();
@@ -98,6 +110,10 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
         let tail = tmux::capture_pane(&agent.pane_id, CAPTURE_LINES).unwrap_or_default();
 
         if looks_crashed(&tail) {
+            log(&format!(
+                "CRASHED {} ({}, {}) — dropped to shell",
+                agent.pane_id, agent.agent_type, agent.location
+            ));
             let _ = set(agent, Status::Crashed, "dropped to shell", now);
             obs.remove(&agent.pane_id);
             continue;
@@ -108,6 +124,10 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
             && agent.status != Status::WaitingApproval
             && is_plan_prompt(&tail)
         {
+            log(&format!(
+                "WAITING_APPROVAL {} ({}, {}) — plan-approval prompt",
+                agent.pane_id, agent.agent_type, agent.location
+            ));
             let _ = set(agent, Status::WaitingApproval, "plan approval", now);
             continue;
         }
@@ -122,6 +142,13 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
                 entry.hash = h;
                 entry.since = now;
             } else if now.saturating_sub(entry.since) >= STALL_SECS {
+                log(&format!(
+                    "STALLED {} ({}, {}) — no output for {}s",
+                    agent.pane_id,
+                    agent.agent_type,
+                    agent.location,
+                    now.saturating_sub(entry.since)
+                ));
                 let _ = set(agent, Status::Stalled, "no progress", now);
             }
         } else {

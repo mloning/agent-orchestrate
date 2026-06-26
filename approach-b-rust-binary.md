@@ -205,10 +205,12 @@ the triage loop I want. (Return-semantics nuance flagged in gotchas to validate 
 
 **Hook snippets** — identical events to Approach A, command swapped to the binary (FR1):
 
-- Claude (`~/.claude/settings.json`): `Notification`/`permission_prompt` → `agentq status
-WAITING_APPROVAL permission`; `elicitation_dialog` → `WAITING_INPUT`; `UserPromptSubmit` →
-  `RUNNING` (this is the registration event, FR1); `Stop` → `IDLE`. Avoid `idle_prompt`
-  (known false-positive).
+- Claude (`~/.claude/settings.json`): use the dedicated `PermissionRequest` event →
+  `WAITING_APPROVAL` (NOT the generic `Notification`, which also fires `idle_prompt` when an
+  agent is merely idle and so mislabels idle agents as waiting — confirmed in practice);
+  `UserPromptSubmit` → `RUNNING` (registration, FR1); `Stop` → `IDLE`; `SessionEnd` →
+  `agentq clear` (removes the agent on exit). `WAITING_INPUT` (elicitation) is deferred —
+  the `Notification` matcher for it shares the idle false-positive risk.
 - Codex (`~/.codex/config.toml`, `[features] hooks = true` + trust): `PermissionRequest` →
   `WAITING_APPROVAL`; `Stop` → `IDLE` (registration events for Codex, FR1).
 - Gemini agy CLI: in scope for v1 (spec §2). Wire the same contract once its first-hook and

@@ -10,8 +10,9 @@
         ]
       }
     ],
-    "Notification": [
+    "PermissionRequest": [
       {
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
@@ -26,6 +27,16 @@
           {
             "type": "command",
             "command": "agentq status IDLE --type claude 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agentq clear 2>/dev/null || true"
           }
         ]
       }

@@ -28,6 +28,8 @@ enum Command {
         #[arg(long = "type", short = 't', default_value = "unknown")]
         agent_type: String,
     },
+    /// Remove the current pane from the dashboard (hook target for session end)
+    Clear,
     /// Launch the persistent live dashboard
     Tui,
     /// Summon / toggle / return binding
@@ -45,6 +47,7 @@ fn main() -> anyhow::Result<()> {
             message,
             agent_type,
         } => status::run(&status, &message, &agent_type),
+        Command::Clear => status::clear(),
         Command::Tui => tui::run(),
         Command::Open => open::run(),
         Command::Watch => watch::run(),
