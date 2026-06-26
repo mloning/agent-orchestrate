@@ -1,0 +1,29 @@
+{
+  "_comment": "Gemini CLI hooks — merge into ~/.gemini/settings.json. Uses Gemini's NATIVE lifecycle events (BeforeAgent = prompt submitted, AfterAgent = turn done, SessionEnd = session end). WAITING_APPROVAL is omitted (no clean 'blocked on approval' event; the watcher is the backstop). Prefer the installer: scripts/install-gemini-hooks.sh",
+  "hooks": {
+    "BeforeAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "name": "agentq", "type": "command", "command": "agentq status RUNNING --type gemini 2>/dev/null || true" }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "name": "agentq", "type": "command", "command": "agentq status IDLE --type gemini 2>/dev/null || true" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "name": "agentq", "type": "command", "command": "agentq clear 2>/dev/null || true" }
+        ]
+      }
+    ]
+  }
+}

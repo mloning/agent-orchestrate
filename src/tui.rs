@@ -350,7 +350,7 @@ fn render_body(f: &mut Frame, app: &mut App, area: Rect) {
             "No agents registered yet.\n\nStart an agent and trigger a hook (e.g. submit a prompt).",
         )
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title(" Agents "));
+        .block(Block::default().borders(Borders::ALL).title(" agents "));
         f.render_widget(p, area);
         return;
     }
@@ -393,14 +393,14 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     let widths = [
         Constraint::Length(7),  // TYPE (claude/codex/gemini)
         Constraint::Length(20), // STATE ("Waiting for approval" = 20)
-        Constraint::Length(16), // LOCATION (session:window)
+        Constraint::Length(32), // LOCATION (session:window) — 2× the old 16
         Constraint::Length(7),  // AGE ("<1 min", "59 min")
-        Constraint::Min(10),    // MESSAGE
+        Constraint::Length(20), // MESSAGE — fixed, narrower
     ];
 
     let table = Table::new(rows, widths)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title(" Agents "))
+        .block(Block::default().borders(Borders::ALL).title(" agents "))
         // Subtle dark-gray bar rather than a full REVERSED (near-white) row; the
         // `▌` marker already makes the selection obvious. Indexed(237) keeps the
         // per-cell text colors readable (incl. the dim IDLE gray).

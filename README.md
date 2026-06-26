@@ -18,20 +18,17 @@ A persistent, live-updating tmux dashboard for triaging AI coding agents
 # Build and install (puts `agentq` in ~/.cargo/bin)
 cargo install --path .
 
-# Wire tmux keybinding (add to ~/.tmux.conf)
-source-file ~/Dev/projects/agent-orchestrate/tmux/agent-orchestrate.conf
-# Then reload: tmux source ~/.tmux.conf
-
-# Wire Claude Code hooks — merges into ~/.claude/settings.json safely:
-#   follows symlinks (dotfiles repos), idempotent, backs up, validates.
+# Wire everything for every agent CLI you have — one safe command:
+#   Claude + Codex (+ its fish clear-on-exit wrapper) + Gemini hooks, plus the
+#   tmux `prefix + i` keybinding. Each merge follows symlinks (dotfiles repos),
+#   backs up, validates, and is idempotent.
 # Preview first, then apply:
-scripts/install-claude-hooks.sh --dry-run
-scripts/install-claude-hooks.sh
-
-# Wire Codex hooks — merges into ~/.codex/hooks.json (same safety guarantees):
-scripts/install-codex-hooks.sh --dry-run
-scripts/install-codex-hooks.sh
-# Then start Codex and approve the hook-trust review, or the hooks won't run.
+scripts/install.sh --dry-run
+scripts/install.sh
+# Per-tool installers also exist: install-{claude,codex,gemini}-hooks.sh, install-tmux.sh
+#
+# After: Claude → run /hooks · Codex → approve the hook-trust review on next
+# launch + open a new fish session · Gemini → restart the CLI. (tmux is applied live.)
 ```
 
 The hook commands pass the agent kind with `--type` and use the absolute `agentq`
