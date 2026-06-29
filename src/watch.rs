@@ -17,12 +17,14 @@ const INTERVAL: Duration = Duration::from_secs(25);
 const STALL_SECS: u64 = 600; // 10 minutes
 /// Lines of pane tail to scrape for crash/plan signatures.
 const CAPTURE_LINES: u32 = 40;
-/// Bottom-most lines treated as the pane's LIVE region. Both the plan-prompt
-/// box and the working-spinner footer are pinned to the bottom of the screen;
-/// once superseded they scroll up out of this window (but stay in the wider
-/// `CAPTURE_LINES` scrollback). Scoping detection to the live region is what
-/// keeps a marker left in scrollback from re-triggering — the bug where a
-/// resumed agent snapped back to WAITING_APPROVAL.
+/// Bottom-most lines treated as the pane's LIVE region. The plan-prompt box,
+/// the working-spinner footer, and a crash's stack trace + shell prompt are all
+/// pinned to the bottom of the screen; once superseded they scroll up out of
+/// this window (but stay in the wider `CAPTURE_LINES` scrollback). Scoping
+/// detection to the live region is what keeps a marker left in scrollback from
+/// re-triggering — the bug where a resumed agent snapped back to
+/// WAITING_APPROVAL, and the bug where a tool-call's traceback in scrollback
+/// was read as the agent itself crashing.
 const LIVE_REGION_LINES: usize = 8;
 
 // --- Signatures (heuristic; tune to keep false positives rare, NFR7) -------
@@ -42,7 +44,10 @@ const AGENT_CHROME: &[&str] = &[
 ];
 
 /// Strong crash/exit signatures: language stack traces and shell errors that
-/// only appear once an agent has died to a shell.
+/// only appear once an agent has died to a shell. Matched ONLY within the LIVE
+/// region (see `looks_crashed`): agents routinely run tools that print a stack
+/// trace as ordinary output (`python -c …`, a failing test), then read it and
+/// keep working — that trace belongs in scrollback, not the bottom of the pane.
 const CRASH_SIGNATURES: &[&str] = &[
     "Traceback (most recent call last):",
     "node:internal/",
@@ -213,13 +218,24 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
 }
 
 /// A registered pane is treated as crashed when its TUI chrome is gone AND
-/// either a crash signature is present or it has fallen back to a bare shell
-/// prompt.
+/// either a crash signature shows in the LIVE region or it has fallen back to a
+/// bare shell prompt.
+///
+/// Crash signatures are matched against the live region, NOT the full capture.
+/// Agents constantly run tools — `python -c …`, a test suite — that print a
+/// stack trace as ordinary tool output; the agent reads it and keeps working,
+/// so the trace scrolls up into scrollback with fresh agent output below it.
+/// Only a trace still pinned to the bottom of the pane, with no agent output or
+/// chrome beneath it, means the agent itself died. Matching the whole capture
+/// flagged those healthy panes as crashed (the reported false positive). The
+/// chrome veto stays wide (full capture): chrome anywhere is strong proof the
+/// TUI is alive, so we err toward NOT flagging a live agent.
 fn looks_crashed(tail: &str) -> bool {
     if AGENT_CHROME.iter().any(|m| tail.contains(m)) {
         return false;
     }
-    if CRASH_SIGNATURES.iter().any(|m| tail.contains(m)) {
+    let live = live_region(tail);
+    if CRASH_SIGNATURES.iter().any(|m| live.contains(m)) {
         return true;
     }
     looks_like_bare_shell(tail)
@@ -315,6 +331,29 @@ mod tests {
     fn stack_trace_without_chrome_is_a_crash() {
         let tail = "Traceback (most recent call last):\n  File \"x.py\"\nValueError: boom";
         assert!(looks_crashed(tail));
+    }
+
+    #[test]
+    fn tool_traceback_in_scrollback_is_not_a_crash() {
+        // Regression (reported bug): the agent ran `python -c …` through a Bash
+        // tool; the command exited 1 and printed a Python traceback as TOOL
+        // OUTPUT, then the agent read it and kept working. The trace sits in
+        // scrollback with agent analysis + a recap rendered below it — the agent
+        // never died, so the pane must NOT be flagged crashed.
+        let mut lines = vec![
+            "  ⎿  Error: Exit code 1",
+            "     Traceback (most recent call last):",
+            "       File \"pandas/core/apply.py\", line 314, in transform",
+            "     KeyError: 'model_name'",
+        ];
+        // Agent output below the trace pushes it up out of the live region.
+        for _ in 0..LIVE_REGION_LINES {
+            lines.push("⏺ Reproduced exactly — same KeyError chain as the PR.");
+        }
+        lines.push("※ recap: confirmed the repro; next decide whether to fix.");
+        let tail = lines.join("\n");
+        assert!(tail.contains("Traceback (most recent call last):")); // in the capture…
+        assert!(!looks_crashed(&tail)); // …but not in the live region → not a crash
     }
 
     #[test]
