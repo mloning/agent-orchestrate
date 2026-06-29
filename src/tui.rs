@@ -372,7 +372,7 @@ fn render_body(f: &mut Frame, app: &mut App, area: Rect) {
 fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
     let now = model::now_unix_secs();
 
-    let header = Row::new(["TYPE", "STATE", "TOPIC", "LOCATION", "AGE", "MESSAGE"])
+    let header = Row::new(["TYPE", "STATE", "LOCATION", "AGE", "MESSAGE", "TOPIC"])
         .style(Style::default().add_modifier(Modifier::BOLD));
 
     let rows = app.agents.iter().map(|a| {
@@ -391,20 +391,20 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
         Row::new(vec![
             Cell::from(a.agent_type.clone()),
             Cell::from(a.status.label()).style(state_style),
-            Cell::from(topic).style(topic_style),
             Cell::from(a.location.clone()),
             Cell::from(age),
             Cell::from(a.message.clone()).style(Style::default().fg(Color::Gray)),
+            Cell::from(topic).style(topic_style),
         ])
     });
 
     let widths = [
         Constraint::Length(7),  // TYPE (claude/codex/gemini)
         Constraint::Length(20), // STATE ("Waiting for approval" = 20)
-        Constraint::Length(28), // TOPIC — stable 3-5 word session label
         Constraint::Length(24), // LOCATION (session:window)
         Constraint::Length(7),  // AGE ("<1 min", "59 min")
         Constraint::Length(18), // MESSAGE — transient, narrower
+        Constraint::Fill(1),    // TOPIC — stable session label, fills to the right
     ];
 
     let table = Table::new(rows, widths)

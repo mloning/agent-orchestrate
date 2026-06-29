@@ -135,6 +135,11 @@ HOOKS="$(jq -n --arg bin "$AGENTQ_BIN" '
   {
     UserPromptSubmit:  [ cmd("RUNNING") ],
     PermissionRequest: [ ({ matcher: "" } + cmd("WAITING_APPROVAL")) ],
+    # PostToolUse fires after any approved tool executes — the only signal that a
+    # permission granted in the agent`s own pane was answered (there is no
+    # PermissionGranted hook), so it clears a stuck WAITING_APPROVAL back to
+    # RUNNING without waiting on the 25s watcher.
+    PostToolUse:       [ ({ matcher: "" } + cmd("RUNNING")) ],
     Stop:              [ cmd("IDLE"), summarize_cmd ],
     SessionEnd:        [ clear_cmd ]
   }')"
@@ -199,6 +204,7 @@ trap - EXIT
 ok=1
 for pair in "UserPromptSubmit:status RUNNING" \
             "PermissionRequest:status WAITING_APPROVAL" \
+            "PostToolUse:status RUNNING" \
             "Stop:status IDLE" \
             "Stop:summarize" \
             "SessionEnd:clear"; do
@@ -210,5 +216,5 @@ for pair in "UserPromptSubmit:status RUNNING" \
     ok=0
   fi
 done
-[ "$ok" -eq 1 ] && log "hooks installed for UserPromptSubmit, PermissionRequest, Stop, SessionEnd."
+[ "$ok" -eq 1 ] && log "hooks installed for UserPromptSubmit, PermissionRequest, PostToolUse, Stop, SessionEnd."
 log "done — open Claude Code and run /hooks to confirm the merge."

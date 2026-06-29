@@ -8,6 +8,7 @@
 # mirrors install-claude-hooks.sh but targets hooks.json with Codex events:
 #   UserPromptSubmit  -> RUNNING
 #   PermissionRequest -> WAITING_APPROVAL
+#   PostToolUse       -> RUNNING
 #   Stop              -> IDLE
 #
 # Safe by design (same as the Claude installer):
@@ -40,7 +41,7 @@ usage() {
 install-codex-hooks.sh — safely merge agentq's hooks into Codex CLI's hooks.json.
 
 Maps UserPromptSubmit -> RUNNING, PermissionRequest -> WAITING_APPROVAL,
-Stop -> IDLE. Follows symlinks, is idempotent, backs up, validates JSON, and
+PostToolUse -> RUNNING, Stop -> IDLE. Follows symlinks, is idempotent, backs up, validates JSON, and
 writes atomically. Codex hooks require trust: the next `codex` launch will prompt
 you to review and trust them, or they won't run.
 
@@ -134,6 +135,11 @@ HOOKS="$(jq -n --arg bin "$AGENTQ_BIN" '
   {
     UserPromptSubmit:  [ cmd("RUNNING") ],
     PermissionRequest: [ ({ matcher: "" } + cmd("WAITING_APPROVAL")) ],
+    # PostToolUse fires after any approved tool executes — the only signal that a
+    # permission granted in Codex`s own pane was answered (there is no
+    # PermissionGranted hook), so it clears a stuck WAITING_APPROVAL back to
+    # RUNNING without waiting on the watcher.
+    PostToolUse:       [ ({ matcher: "" } + cmd("RUNNING")) ],
     Stop:              [ cmd("IDLE"), summarize_cmd ]
   }')"
 
@@ -195,6 +201,7 @@ trap - EXIT
 ok=1
 for pair in "UserPromptSubmit:status RUNNING" \
             "PermissionRequest:status WAITING_APPROVAL" \
+            "PostToolUse:status RUNNING" \
             "Stop:status IDLE" \
             "Stop:summarize"; do
   ev="${pair%%:*}"; needle="${pair#*:}"
@@ -205,7 +212,7 @@ for pair in "UserPromptSubmit:status RUNNING" \
     ok=0
   fi
 done
-[ "$ok" -eq 1 ] && log "hooks installed for UserPromptSubmit, PermissionRequest, Stop."
+[ "$ok" -eq 1 ] && log "hooks installed for UserPromptSubmit, PermissionRequest, PostToolUse, Stop."
 
 # --- shell wrapper: clear on exit (Codex has no SessionEnd hook) ------------
 # A clean codex exit fires no hook, so it can't be caught the way Claude's
