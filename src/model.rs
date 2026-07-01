@@ -138,6 +138,16 @@ pub struct Agent {
     pub topic: String,
 }
 
+impl Agent {
+    /// The tmux session name — the part of `location` before the `:`. This is
+    /// the primary anchor for context switching (one session ⇔ one project).
+    /// tmux forbids `:` in session names, so the split is unambiguous. The full
+    /// `location` is still used for warp/send and flash messages.
+    pub fn session(&self) -> &str {
+        self.location.split(':').next().unwrap_or(&self.location)
+    }
+}
+
 impl Eq for Agent {}
 
 impl PartialEq for Agent {
@@ -282,6 +292,19 @@ mod tests {
         ];
         v.sort();
         assert_eq!(v[0].pane_id, "%old"); // smaller @agent_updated = older = higher
+    }
+
+    #[test]
+    fn session_is_location_before_colon() {
+        // tmux forbids ':' in session names, so the split is unambiguous even
+        // for multi-digit window indices.
+        assert_eq!(agent("%1", Status::Idle, 0).session(), "work");
+        let mut a = agent("%1", Status::Idle, 0);
+        a.location = "agent-orchestrate:12".into();
+        assert_eq!(a.session(), "agent-orchestrate");
+        // No colon (shouldn't happen, but stay total): whole string is session.
+        a.location = "solo".into();
+        assert_eq!(a.session(), "solo");
     }
 
     #[test]
