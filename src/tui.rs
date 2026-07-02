@@ -398,7 +398,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
 
     // STATE auto-sizes to the widest label actually present, so the column is
     // tight when the fleet is all Running/Idle and only grows to fit "Waiting
-    // for approval" (20) when such an agent exists. Floored at the header.
+    // for input" (17) when such an agent exists. Floored at the header.
     let state_w = app
         .agents
         .iter()

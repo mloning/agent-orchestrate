@@ -40,7 +40,6 @@ pub enum Status {
     Crashed,
     Stalled,
     WaitingApproval,
-    WaitingInput,
     Running,
     Idle,
 }
@@ -51,7 +50,6 @@ impl fmt::Display for Status {
             Status::Crashed => "CRASHED",
             Status::Stalled => "STALLED",
             Status::WaitingApproval => "WAITING_APPROVAL",
-            Status::WaitingInput => "WAITING_INPUT",
             Status::Running => "RUNNING",
             Status::Idle => "IDLE",
         };
@@ -67,7 +65,6 @@ impl FromStr for Status {
             "CRASHED" => Ok(Status::Crashed),
             "STALLED" => Ok(Status::Stalled),
             "WAITING_APPROVAL" => Ok(Status::WaitingApproval),
-            "WAITING_INPUT" => Ok(Status::WaitingInput),
             "RUNNING" => Ok(Status::Running),
             "IDLE" => Ok(Status::Idle),
             other => anyhow::bail!("unknown status: {other}"),
@@ -81,9 +78,8 @@ impl Status {
         match self {
             Status::Crashed | Status::Stalled => 0,
             Status::WaitingApproval => 1,
-            Status::WaitingInput => 2,
-            Status::Running => 3,
-            Status::Idle => 4,
+            Status::Running => 2,
+            Status::Idle => 3,
         }
     }
 
@@ -93,8 +89,7 @@ impl Status {
         match self {
             Status::Crashed => "Crashed",
             Status::Stalled => "Stalled",
-            Status::WaitingApproval => "Waiting for approval",
-            Status::WaitingInput => "Waiting for input",
+            Status::WaitingApproval => "Waiting",
             Status::Running => "Running",
             Status::Idle => "Idle",
         }
@@ -104,7 +99,7 @@ impl Status {
     pub fn is_attention(&self) -> bool {
         matches!(
             self,
-            Status::Crashed | Status::Stalled | Status::WaitingApproval | Status::WaitingInput
+            Status::Crashed | Status::Stalled | Status::WaitingApproval
         )
     }
 
@@ -113,7 +108,6 @@ impl Status {
         match self {
             Status::Crashed | Status::Stalled => Color::Red,
             Status::WaitingApproval => Color::Yellow,
-            Status::WaitingInput => Color::Magenta,
             Status::Running => Color::Green,
             Status::Idle => Color::DarkGray,
         }
@@ -269,7 +263,6 @@ mod tests {
         let mut v = [
             agent("%idle", Status::Idle, 1),
             agent("%run", Status::Running, 1),
-            agent("%wi", Status::WaitingInput, 1),
             agent("%wa", Status::WaitingApproval, 1),
             agent("%stall", Status::Stalled, 1),
             agent("%crash", Status::Crashed, 1),
@@ -278,9 +271,8 @@ mod tests {
         let order: Vec<&str> = v.iter().map(|a| a.pane_id.as_str()).collect();
         // CRASHED/STALLED share tier 0 (stable order between them is fine).
         assert_eq!(order[2], "%wa");
-        assert_eq!(order[3], "%wi");
-        assert_eq!(order[4], "%run");
-        assert_eq!(order[5], "%idle");
+        assert_eq!(order[3], "%run");
+        assert_eq!(order[4], "%idle");
         assert!(v[0].status.tier() == 0 && v[1].status.tier() == 0);
     }
 

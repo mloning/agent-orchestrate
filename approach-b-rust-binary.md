@@ -74,7 +74,7 @@ tmux config stays a one-liner and the logic is testable in Rust rather than `if-
 ## State model (unchanged from Approach A)
 
 Pane user-options set on the agent's own pane (`$TMUX_PANE`):
-`@agent_status` (RUNNING | WAITING_APPROVAL | WAITING_INPUT | IDLE | CRASHED | STALLED),
+`@agent_status` (RUNNING | WAITING_APPROVAL | IDLE | CRASHED | STALLED),
 `@agent_msg`, `@agent_updated` (unix seconds), `@agent_type` (claude | codex | gemini | …).
 The pane id is the unique key — dedup is free and state auto-cleans when the pane dies (NFR5).
 `@agent_type` is an open string so a third agent slots in without a schema change.
@@ -143,7 +143,7 @@ pub fn send_line(pane_id: &str, text: &str) -> anyhow::Result<()> {
 
 **`src/model.rs`** — `Status` priority **matches FR3 exactly** (this was wrong in the first
 draft): tier order, top to bottom, is
-`CRASHED/STALLED → WAITING_APPROVAL → WAITING_INPUT → RUNNING → IDLE`.
+`CRASHED/STALLED → WAITING_APPROVAL → RUNNING → IDLE`.
 CRASHED and STALLED share the top tier. Within a tier, **oldest `@agent_updated` first**
 (OQ-2 default; tie-break is a one-line change if I later prefer most-recently-changed).
 
@@ -152,9 +152,8 @@ CRASHED and STALLED share the top tier. Within a tier, **oldest `@agent_updated`
 fn tier(&self) -> u8 { match self {
     Crashed | Stalled => 0,
     WaitingApproval   => 1,
-    WaitingInput      => 2,
-    Running           => 3,
-    Idle              => 4,
+    Running           => 2,
+    Idle              => 3,
 }}
 ```
 
@@ -170,8 +169,8 @@ fn tier(&self) -> u8 { match self {
     next poll (FR6). `n` likewise with `n` (FR6).
   - `r` — **reply / free-text send** (FR7): opens a one-line composer at the bottom; `Enter`
     sends via `send_line(pane, text)`, `Esc` cancels. **Guard:** `r` only opens directly when
-    the selected agent is in an attention-state (`WAITING_APPROVAL | WAITING_INPUT |
-STALLED | CRASHED`). For any non-attention state (RUNNING/IDLE) it first requires a
+    the selected agent is in an attention-state (`WAITING_APPROVAL | STALLED |
+CRASHED`). For any non-attention state (RUNNING/IDLE) it first requires a
     confirm (`send to a non-waiting pane? y/N`) so stray input can't be injected into a busy
     agent (FR7 guard; §8 tradeoff).
   - `Enter` — `warp(pane_id)`: switch the client to the agent's **exact pane** (FR8). The
@@ -209,12 +208,13 @@ the triage loop I want. (Return-semantics nuance flagged in gotchas to validate 
   `WAITING_APPROVAL` (NOT the generic `Notification`, which also fires `idle_prompt` when an
   agent is merely idle and so mislabels idle agents as waiting — confirmed in practice);
   `UserPromptSubmit` → `RUNNING` (registration, FR1); `Stop` → `IDLE`; `SessionEnd` →
-  `agentq clear` (removes the agent on exit). `WAITING_INPUT` (elicitation) is deferred —
-  the `Notification` matcher for it shares the idle false-positive risk.
+  `agentq clear` (removes the agent on exit). Elicitation/free-text prompts are folded into
+  `WAITING_APPROVAL` — there is no separate input state (a dedicated `Notification` matcher
+  would share the idle false-positive risk anyway).
 - Codex (`~/.codex/config.toml`, `[features] hooks = true` + trust): `PermissionRequest` →
   `WAITING_APPROVAL`; `Stop` → `IDLE` (registration events for Codex, FR1).
 - Gemini agy CLI: in scope for v1 (spec §2). Wire the same contract once its first-hook and
-  `WAITING_*` events are confirmed (spec OQ-5). The state model already accepts `@agent_type
+  `WAITING_APPROVAL` events are confirmed (spec OQ-5). The state model already accepts `@agent_type
 gemini`, so this is a **producer-only** addition with zero consumer change — Gemini ships as a
   fast-follow behind Claude+Codex.
 
@@ -332,7 +332,7 @@ Each must pass for both a Claude and a Codex agent (parity, spec §9).
    back → the dashboard is **still running** and current, not reopened.
 5. **Act in place (AC4 · FR6):** `y` → the agent's pane receives `y⏎` and proceeds; row drops to
    RUNNING. Repeat with `n`. Dashboard stays put throughout.
-6. **Reply (AC5 · FR7):** select a `WAITING_INPUT` agent, `r`, type a line, `Enter` → received.
+6. **Reply (AC5 · FR7):** select a `WAITING_APPROVAL` agent, `r`, type a line, `Enter` → received.
    Then try `r` on a RUNNING row → blocked/confirmed, no stray input sent.
 7. **Jump (AC6 · FR8):** `Enter` on a row → client lands on that agent's **exact pane**;
    `prefix+i` returns to where I was.

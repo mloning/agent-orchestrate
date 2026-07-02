@@ -164,7 +164,7 @@ merged="$(printf '%s' "$current" | jq --argjson snip "$HOOKS" '
     [ (.command // empty), ((.hooks // [])[] | .command // empty) ]
     | any(. as $c
           | ($c | test("agentq"))
-            and ($c | test("status (RUNNING|WAITING_APPROVAL|WAITING_INPUT|IDLE|CRASHED|STALLED)|\\bclear\\b|\\bsummarize\\b")));
+            and ($c | test("status (RUNNING|WAITING_APPROVAL|IDLE|CRASHED|STALLED)|\\bclear\\b|\\bsummarize\\b")));
   .hooks = (.hooks // {})
   | .hooks |= with_entries(.value |= map(select(is_ours | not)))
   | reduce ($snip | to_entries[]) as $e (.;
