@@ -80,6 +80,21 @@ const PLAN_PROMPT_MARKERS: &[&str] = &[
 /// stay until the human answers it).
 const PLAN_APPROVAL_MSG: &str = "plan approval";
 
+/// Claude tool-permission prompt text. Deliberately distinct from the plan
+/// prompt's "Would you like to proceed?" wording (`PLAN_PROMPT_MARKERS`) so the
+/// two never cross-match. Normally the `PermissionRequest` hook flips these to
+/// `WAITING_APPROVAL`, but the watcher scrapes for them too as a fallback for
+/// prompt variants that fire NO hook — notably the Bash command-safety
+/// confirmation (the "brace expansion" / command-injection warning), which
+/// leaves the pane stuck at RUNNING with a live prompt on screen. Claude-only.
+const TOOL_PROMPT_MARKERS: &[&str] = &["Do you want to proceed?"];
+
+/// Sentinel message stamped on a watcher-driven tool-permission wait. Like
+/// `PLAN_APPROVAL_MSG`, it discriminates the waits the watcher created (safe to
+/// auto-resume the instant the prompt disappears) from a real `PermissionRequest`
+/// wait (message is the project name; stays until the human answers it).
+const TOOL_APPROVAL_MSG: &str = "tool approval";
+
 /// "Actively working" footer markers — the interrupt hint agents render only
 /// while a turn is running, never while a prompt awaits input. Matched
 /// case-insensitively so both Claude's `esc to interrupt` and Codex's
@@ -87,6 +102,15 @@ const PLAN_APPROVAL_MSG: &str = "plan approval";
 /// approval wait answered in the agent's own pane (tool-permission approvals
 /// fire no "granted" hook). Tune here if an agent's wording differs.
 const WORKING_MARKERS: &[&str] = &["esc to interrupt"];
+
+/// Claude turn-error signature. When a turn fails unrecoverably (e.g. the API
+/// is unreachable after retries are exhausted) Claude renders an `API Error:`
+/// assistant line and ENDS the turn — the process stays alive at the Claude
+/// TUI, so no `Stop` hook fires and the pane sits stuck at RUNNING. Matched in
+/// the LIVE region while the agent is not working (see `looks_errored`), which
+/// excludes the transient "Retrying…" footer that keeps the interrupt hint up.
+/// Claude-only wording.
+const API_ERROR_MARKERS: &[&str] = &["API Error:"];
 
 // ---------------------------------------------------------------------------
 
@@ -146,6 +170,25 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
             continue;
         }
 
+        // Claude API/turn error: the TUI is alive (so `looks_crashed` sees no
+        // shell/stack trace) but the turn died with no `Stop` hook, and the
+        // `✻ Cooked for …` footer keeps the tail ticking so the stall check never
+        // fires either — the pane would otherwise sit stuck at RUNNING. Detect it
+        // directly and treat it as CRASHED (needs attention); a re-prompt fires
+        // UserPromptSubmit → RUNNING and recovers it. Claude-only.
+        if agent.status == Status::Running
+            && agent.agent_type == "claude"
+            && looks_errored(&tail)
+        {
+            log(&format!(
+                "CRASHED {} ({}, {}) — api error",
+                agent.pane_id, agent.agent_type, agent.location
+            ));
+            let _ = set(agent, Status::Crashed, "api error", now);
+            obs.remove(&agent.pane_id);
+            continue;
+        }
+
         // Raise the Claude plan-approval gap: it fires no hook (issue #19283;
         // OQ-3 default yes), so the watcher detects it from the on-screen prompt.
         // Detection is scoped to the LIVE region (`is_active_plan_prompt`) so an
@@ -163,13 +206,38 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
             continue;
         }
 
+        // Raise a Claude tool-permission prompt that no hook reported. Normally
+        // `PermissionRequest` → WAITING_APPROVAL covers these within ~500ms, but
+        // some prompt variants fire no hook — notably the Bash command-safety
+        // confirmation (the "brace expansion" warning) — leaving the pane stuck
+        // at RUNNING with a live prompt on screen (the reported gap). Mirrors the
+        // plan branch: scoped to the LIVE region so an answered prompt in
+        // scrollback never re-triggers, and it never overwrites an existing
+        // WAITING_APPROVAL, so a hook-set wait keeps its project-name message.
+        // The `!looks_working` guard makes it strictly safe: a real prompt shows
+        // no interrupt hint, so this only skips a working pane that happens to
+        // echo the phrase in its live output — a missed raise, never a false one.
+        if agent.agent_type == "claude"
+            && agent.status != Status::WaitingApproval
+            && is_active_tool_prompt(&tail)
+            && !looks_working(&tail)
+        {
+            log(&format!(
+                "WAITING_APPROVAL {} ({}, {}) — tool-permission prompt",
+                agent.pane_id, agent.agent_type, agent.location
+            ));
+            let _ = set(agent, Status::WaitingApproval, TOOL_APPROVAL_MSG, now);
+            continue;
+        }
+
         // Resume a stale approval wait. Neither a plan approval nor a tool
         // permission fires a "granted" hook, so a prompt answered in the agent's
         // own pane would otherwise sit at WAITING_APPROVAL until the turn ends.
-        // Two safe signals, both confined to the LIVE region so a marker left in
-        // scrollback can't fire a false resume:
+        // Two kinds of safe signal, both confined to the LIVE region so a marker
+        // left in scrollback can't fire a false resume:
         //   - the agent is visibly working again (interrupt-hint footer), or
-        //   - a watcher-raised plan wait (sentinel msg) whose prompt is now gone.
+        //   - a watcher-raised wait (plan or tool sentinel msg) whose prompt is
+        //     now gone.
         // Conservatively gated (NFR7, and the #1 goal of never hiding a real
         // prompt): the interrupt hint shows only while working — never while a
         // prompt is up — so the failure direction is a missed resume, not a
@@ -177,15 +245,25 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
         // matches neither signal and stays put.
         if agent.status == Status::WaitingApproval {
             let working = looks_working(&tail);
+            // Auto-resume purely on the prompt disappearing is safe ONLY for the
+            // waits the watcher itself raised (identified by sentinel msg); a real
+            // PermissionRequest wait carries the project name and stays until the
+            // human answers it (then PostToolUse/`looks_working` resumes it).
             let answered_plan = agent.message == PLAN_APPROVAL_MSG
                 && !is_active_plan_prompt(&tail);
-            if working || answered_plan {
+            let answered_tool = agent.message == TOOL_APPROVAL_MSG
+                && !is_active_tool_prompt(&tail);
+            if working || answered_plan || answered_tool {
+                let why = if working {
+                    "agent working"
+                } else if answered_plan {
+                    "plan prompt gone"
+                } else {
+                    "tool prompt gone"
+                };
                 log(&format!(
                     "RUNNING {} ({}, {}) — approval answered ({})",
-                    agent.pane_id,
-                    agent.agent_type,
-                    agent.location,
-                    if working { "agent working" } else { "plan prompt gone" }
+                    agent.pane_id, agent.agent_type, agent.location, why
                 ));
                 let _ = set(agent, Status::Running, "resumed", now);
                 continue;
@@ -268,12 +346,35 @@ fn is_active_plan_prompt(tail: &str) -> bool {
     is_plan_prompt(&live_region(tail))
 }
 
+fn is_tool_prompt(tail: &str) -> bool {
+    TOOL_PROMPT_MARKERS.iter().any(|m| tail.contains(m))
+}
+
+/// True only when a tool-permission prompt is the LIVE prompt — its marker
+/// appears in the bottom `LIVE_REGION_LINES`. An answered prompt has fresh agent
+/// output below it, so its marker falls outside this window and reads as
+/// inactive. Mirrors `is_active_plan_prompt`.
+fn is_active_tool_prompt(tail: &str) -> bool {
+    is_tool_prompt(&live_region(tail))
+}
+
 /// True when the agent's live footer shows it is actively processing a turn (the
 /// interrupt hint). Scoped to the LIVE region and matched case-insensitively;
 /// used to resume an approval wait answered in the agent's own pane.
 fn looks_working(tail: &str) -> bool {
     let region = live_region(tail).to_ascii_lowercase();
     WORKING_MARKERS.iter().any(|m| region.contains(m))
+}
+
+/// True when a Claude turn has ended in an unrecoverable API error: an
+/// `API Error:` line in the LIVE region while the agent is NOT working. The
+/// live-region scope keeps an error scrolled up by later output (a turn that
+/// recovered) from matching, and the `!looks_working` guard excludes the
+/// transient "Retrying…" state, which keeps the interrupt hint up — so only a
+/// terminal error is flagged.
+fn looks_errored(tail: &str) -> bool {
+    let live = live_region(tail);
+    API_ERROR_MARKERS.iter().any(|m| live.contains(m)) && !looks_working(tail)
 }
 
 /// The bottom `LIVE_REGION_LINES` of a capture, joined back into one string.
@@ -404,11 +505,87 @@ mod tests {
     }
 
     #[test]
+    fn detects_tool_prompt() {
+        assert!(is_tool_prompt("Bash command\n  ls\nDo you want to proceed?"));
+        // Must NOT collide with the plan prompt's distinct wording.
+        assert!(!is_tool_prompt("Would you like to proceed?"));
+        assert!(!is_tool_prompt("just some normal output"));
+    }
+
+    #[test]
+    fn active_tool_prompt_detected_when_box_is_at_bottom() {
+        // The reported gap: a Bash command-safety confirmation (brace-expansion
+        // warning) pinned to the bottom of the pane. No hook fired, so the
+        // watcher must catch it. Also proves it is neither working nor crashed.
+        let tail = "earlier agent output\n\
+                    Bash command\n\
+                    \x20\x20gh auth status | grep account; git log @{u}..\n\
+                    \x20\x20Run shell command\n\
+                    Brace expansion (unquoted `{` in concatenation with `,`/`..`)\n\
+                    Do you want to proceed?\n\
+                    ❯ 1. Yes\n\
+                    \x20\x202. No\n\
+                    Esc to cancel · Tab to amend · ctrl+e to explain";
+        assert!(is_active_tool_prompt(tail));
+        assert!(!looks_working(tail)); // footer is "esc to cancel", not "interrupt"
+        assert!(!looks_crashed(tail)); // a prompt is not a shell/crash
+    }
+
+    #[test]
+    fn answered_tool_prompt_in_scrollback_is_not_active() {
+        // The prompt was answered and the agent resumed; its marker has scrolled
+        // up out of the live region even though it remains in the wider capture.
+        // This is what lets the watcher auto-resume a `TOOL_APPROVAL_MSG` wait.
+        let mut lines = vec!["Do you want to proceed?", "❯ 1. Yes", "  2. No"];
+        for _ in 0..LIVE_REGION_LINES {
+            lines.push("⏺ running the approved command…");
+        }
+        let tail = lines.join("\n");
+        assert!(is_tool_prompt(&tail)); // still present in the full capture
+        assert!(!is_active_tool_prompt(&tail)); // …but no longer the live prompt
+    }
+
+    #[test]
     fn working_footer_signals_active_turn() {
         // Claude and Codex interrupt-hint footers, matched case-insensitively.
         assert!(looks_working("⏺ Editing files…\n  ✻ Cogitating (12s · esc to interrupt)"));
         assert!(looks_working("working\n  Press Esc to interrupt"));
         assert!(!looks_working("idle\n> "));
+    }
+
+    #[test]
+    fn api_error_ending_a_turn_is_errored() {
+        // Reported bug: a turn died with `API Error:` and Claude ended it (no
+        // interrupt hint); the `Cooked for …` footer keeps ticking so it never
+        // crashes to a shell nor stalls — it must be flagged.
+        let tail = "❯ what's @launchd/ being used for?\n\
+                    ⎿  Listed directory launchd/\n\n\
+                    ⏺ API Error: Unable to connect to API (ConnectionRefused)\n\n\
+                    ✻ Cooked for 17m 37s";
+        assert!(looks_errored(tail));
+        // It is NOT a shell crash — the Claude TUI is still on screen.
+        assert!(!looks_crashed(tail));
+    }
+
+    #[test]
+    fn api_error_while_retrying_is_not_errored() {
+        // A transient error mid-retry keeps the interrupt hint up (the turn is
+        // still alive and will recover), so it must not be flagged.
+        let tail = "⏺ API Error: Overloaded\n\
+                    ✻ Retrying in 8s… (attempt 2/10 · esc to interrupt)";
+        assert!(!looks_errored(tail));
+    }
+
+    #[test]
+    fn api_error_in_scrollback_is_not_errored() {
+        // An earlier error the turn recovered from scrolls up out of the live
+        // region; fresh agent output below it means the agent kept working.
+        let mut lines = vec!["⏺ API Error: Overloaded"];
+        for _ in 0..LIVE_REGION_LINES {
+            lines.push("⏺ recovered and continued working…");
+        }
+        let tail = lines.join("\n");
+        assert!(!looks_errored(&tail));
     }
 
     #[test]

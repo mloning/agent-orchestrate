@@ -30,7 +30,7 @@ differ by trigger.
 |---|---|---|---|---|
 | idle | running | `UserPromptSubmit` → `RUNNING` | same | hook |
 | running | idle | `Stop` → `IDLE` | same | hook |
-| running | waiting approval *(tool permission)* | `PermissionRequest` → `WAITING_APPROVAL` | same | hook |
+| running | waiting approval *(tool permission)* | `PermissionRequest` → `WAITING_APPROVAL`; **watcher fallback** matches the on-screen prompt (`is_active_tool_prompt`, msg `"tool approval"`) for variants that fire no hook — notably the Bash command-safety / "brace expansion" confirmation | same (hook only) | hook + watcher fallback |
 | running | waiting approval *(plan prompt)* | **watcher** matches on-screen prompt text (`is_active_plan_prompt`), sets `WAITING_APPROVAL` msg `"plan approval"` | n/a | watcher only — Claude fires *no* hook for plan prompts (issue #19283) |
 | waiting approval | running *(approved in TUI · `y`)* | TUI optimistically sets `RUNNING` immediately | same | TUI write |
 | waiting approval | running *(approved in the pane)* | `PostToolUse` → `RUNNING` fires after the approved tool executes; watcher's "esc to interrupt" check (`looks_working`) is the fallback | same — Codex also fires `PostToolUse` | hook, watcher fallback — see below |
@@ -80,6 +80,12 @@ Remaining caveats:
 
 - This covers **tool-permission** approvals. Claude **plan** approvals still fire no hook
   and keep relying on the watcher — unavoidable, and already handled.
+- Not every tool-permission prompt fires `PermissionRequest`. The Bash command-safety
+  confirmation (the "brace expansion" / command-injection warning) is a secondary gate
+  that was observed to leave the row stuck at `RUNNING`. The watcher now scrapes for the
+  live tool-permission prompt (`is_active_tool_prompt`, "Do you want to proceed?") as a
+  fallback and auto-resumes it (msg `"tool approval"`) once the prompt clears — mirroring
+  the plan-prompt path. Cost: up to ~25s of watcher lag before an un-hooked prompt shows.
 - For Codex, the watcher's `looks_working` ("Esc to interrupt") check remains the
   fallback for any case where `PostToolUse` doesn't fire (e.g. an approval that runs no
   subsequent tool).
