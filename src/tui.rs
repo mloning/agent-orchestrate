@@ -428,7 +428,7 @@ fn render_table(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_preview(f: &mut Frame, app: &App, area: Rect) {
     let title = match app.selected_agent() {
-        Some(a) => format!(" preview · {} · {} ", a.agent_type, a.location),
+        Some(a) => format!(" preview · {} ", a.location),
         None => " preview ".to_string(),
     };
     let block = Block::default().borders(Borders::ALL).title(title);
