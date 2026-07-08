@@ -20,10 +20,10 @@ command = "agentq status RUNNING --type codex 2>/dev/null || true"
 [[hooks.PermissionRequest]]
 [[hooks.PermissionRequest.hooks]]
 type = "command"
-command = "agentq status WAITING_APPROVAL --type codex 2>/dev/null || true"
+command = "agentq status WAITING --type codex 2>/dev/null || true"
 
 # PostToolUse fires after any approved tool executes — the signal that resumes a
-# WAITING_APPROVAL answered in Codex's own pane (no "granted" hook exists), so
+# WAITING answered in Codex's own pane (no "granted" hook exists), so
 # the dashboard row clears back to RUNNING without waiting on the watcher.
 [[hooks.PostToolUse]]
 [[hooks.PostToolUse.hooks]]

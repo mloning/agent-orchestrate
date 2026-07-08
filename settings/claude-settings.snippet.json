@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentq status WAITING_APPROVAL --type claude 2>/dev/null || true"
+            "command": "agentq status WAITING --type claude 2>/dev/null || true"
           }
         ]
       }

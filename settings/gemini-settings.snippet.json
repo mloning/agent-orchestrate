@@ -1,5 +1,5 @@
 {
-  "_comment": "Gemini CLI hooks — merge into ~/.gemini/settings.json. Uses Gemini's NATIVE lifecycle events (BeforeAgent = prompt submitted, AfterAgent = turn done, SessionEnd = session end). WAITING_APPROVAL is omitted (no clean 'blocked on approval' event; the watcher is the backstop). Prefer the installer: scripts/install-gemini-hooks.sh",
+  "_comment": "Gemini CLI hooks — merge into ~/.gemini/settings.json. Uses Gemini's NATIVE lifecycle events (BeforeAgent = prompt submitted, AfterAgent = turn done, SessionEnd = session end). WAITING is omitted (no clean 'blocked on approval' event; the watcher is the backstop). Prefer the installer: scripts/install-gemini-hooks.sh",
   "hooks": {
     "BeforeAgent": [
       {

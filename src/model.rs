@@ -39,7 +39,7 @@ pub fn humanize_age(secs: u64) -> String {
 pub enum Status {
     Crashed,
     Stalled,
-    WaitingApproval,
+    Waiting,
     Running,
     Idle,
 }
@@ -49,7 +49,7 @@ impl fmt::Display for Status {
         let label = match self {
             Status::Crashed => "CRASHED",
             Status::Stalled => "STALLED",
-            Status::WaitingApproval => "WAITING_APPROVAL",
+            Status::Waiting => "WAITING",
             Status::Running => "RUNNING",
             Status::Idle => "IDLE",
         };
@@ -64,7 +64,7 @@ impl FromStr for Status {
         match s.to_ascii_uppercase().as_str() {
             "CRASHED" => Ok(Status::Crashed),
             "STALLED" => Ok(Status::Stalled),
-            "WAITING_APPROVAL" => Ok(Status::WaitingApproval),
+            "WAITING" => Ok(Status::Waiting),
             "RUNNING" => Ok(Status::Running),
             "IDLE" => Ok(Status::Idle),
             other => anyhow::bail!("unknown status: {other}"),
@@ -77,7 +77,7 @@ impl Status {
     pub fn tier(&self) -> u8 {
         match self {
             Status::Crashed | Status::Stalled => 0,
-            Status::WaitingApproval => 1,
+            Status::Waiting => 1,
             Status::Running => 2,
             Status::Idle => 3,
         }
@@ -89,7 +89,7 @@ impl Status {
         match self {
             Status::Crashed => "Crashed",
             Status::Stalled => "Stalled",
-            Status::WaitingApproval => "Waiting",
+            Status::Waiting => "Waiting",
             Status::Running => "Running",
             Status::Idle => "Idle",
         }
@@ -99,7 +99,7 @@ impl Status {
     pub fn is_attention(&self) -> bool {
         matches!(
             self,
-            Status::Crashed | Status::Stalled | Status::WaitingApproval
+            Status::Crashed | Status::Stalled | Status::Waiting
         )
     }
 
@@ -107,7 +107,7 @@ impl Status {
     pub fn color(&self) -> Color {
         match self {
             Status::Crashed | Status::Stalled => Color::Red,
-            Status::WaitingApproval => Color::Yellow,
+            Status::Waiting => Color::Yellow,
             Status::Running => Color::Green,
             Status::Idle => Color::DarkGray,
         }
@@ -221,10 +221,10 @@ mod tests {
 
     #[test]
     fn parses_full_line() {
-        let line = "%3\tWAITING_APPROVAL\twork:1\tcodex\t1700\trun tests?\tagentq topic column";
+        let line = "%3\tWAITING\twork:1\tcodex\t1700\trun tests?\tagentq topic column";
         let a = parse_pane_line(line).expect("should parse");
         assert_eq!(a.pane_id, "%3");
-        assert_eq!(a.status, Status::WaitingApproval);
+        assert_eq!(a.status, Status::Waiting);
         assert_eq!(a.location, "work:1");
         assert_eq!(a.agent_type, "codex");
         assert_eq!(a.updated, 1700);
@@ -263,7 +263,7 @@ mod tests {
         let mut v = [
             agent("%idle", Status::Idle, 1),
             agent("%run", Status::Running, 1),
-            agent("%wa", Status::WaitingApproval, 1),
+            agent("%wa", Status::Waiting, 1),
             agent("%stall", Status::Stalled, 1),
             agent("%crash", Status::Crashed, 1),
         ];
@@ -279,8 +279,8 @@ mod tests {
     #[test]
     fn within_tier_oldest_waiting_first() {
         let mut v = [
-            agent("%new", Status::WaitingApproval, 200),
-            agent("%old", Status::WaitingApproval, 100),
+            agent("%new", Status::Waiting, 200),
+            agent("%old", Status::Waiting, 100),
         ];
         v.sort();
         assert_eq!(v[0].pane_id, "%old"); // smaller @agent_updated = older = higher

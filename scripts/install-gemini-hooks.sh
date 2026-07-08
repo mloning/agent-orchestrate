@@ -9,7 +9,7 @@
 #   AfterAgent  -> IDLE             (fires when the agent finishes a turn)
 #   SessionEnd  -> agentq clear     (removes the agent when the session ends)
 #
-# WAITING_APPROVAL is intentionally omitted: Gemini has no clean "blocked on
+# WAITING is intentionally omitted: Gemini has no clean "blocked on
 # approval" lifecycle event (BeforeTool fires for every tool, not just blocks),
 # so the crash/stall watcher is the backstop for attention there.
 #
@@ -140,7 +140,7 @@ merged="$(printf '%s' "$current" | jq --argjson snip "$HOOKS" '
     [ (.command // empty), ((.hooks // [])[] | .command // empty) ]
     | any(. as $c
           | ($c | test("agentq"))
-            and ($c | test("status (RUNNING|WAITING_APPROVAL|IDLE|CRASHED|STALLED)|\\bclear\\b|\\bsummarize\\b")));
+            and ($c | test("status (RUNNING|WAITING|IDLE|CRASHED|STALLED)|\\bclear\\b|\\bsummarize\\b")));
   .hooks = (.hooks // {})
   | .hooks |= with_entries(.value |= map(select(is_ours | not)))
   | reduce ($snip | to_entries[]) as $e (.;

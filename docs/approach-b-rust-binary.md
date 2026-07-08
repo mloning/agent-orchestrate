@@ -47,7 +47,7 @@ tmux config stays a one-liner and the logic is testable in Rust rather than `if-
  Agent pane (claude/codex/gemini)        Any pane I'm working in
  ┌──────────────────────────┐           ┌──────────────────────────────┐
  │ hook → agentq status      │           │  prefix + i → agentq open     │
- │   WAITING_APPROVAL         │           │   ├─ not in agentq: record    │
+ │   WAITING         │           │   ├─ not in agentq: record    │
  │   ↓ shells out to          │           │   │   origin pane, ensure     │
  │ tmux set -p @agent_*       │◀──reads───│   │   session, switch-client  │
  └──────────────────────────┘  (poll)    │   └─ in agentq: switch-client │
@@ -74,7 +74,7 @@ tmux config stays a one-liner and the logic is testable in Rust rather than `if-
 ## State model (unchanged from Approach A)
 
 Pane user-options set on the agent's own pane (`$TMUX_PANE`):
-`@agent_status` (RUNNING | WAITING_APPROVAL | IDLE | CRASHED | STALLED),
+`@agent_status` (RUNNING | WAITING | IDLE | CRASHED | STALLED),
 `@agent_msg`, `@agent_updated` (unix seconds), `@agent_type` (claude | codex | gemini | …).
 The pane id is the unique key — dedup is free and state auto-cleans when the pane dies (NFR5).
 `@agent_type` is an open string so a third agent slots in without a schema change.
@@ -143,7 +143,7 @@ pub fn send_line(pane_id: &str, text: &str) -> anyhow::Result<()> {
 
 **`src/model.rs`** — `Status` priority **matches FR3 exactly** (this was wrong in the first
 draft): tier order, top to bottom, is
-`CRASHED/STALLED → WAITING_APPROVAL → RUNNING → IDLE`.
+`CRASHED/STALLED → WAITING → RUNNING → IDLE`.
 CRASHED and STALLED share the top tier. Within a tier, **oldest `@agent_updated` first**
 (OQ-2 default; tie-break is a one-line change if I later prefer most-recently-changed).
 
@@ -151,7 +151,7 @@ CRASHED and STALLED share the top tier. Within a tier, **oldest `@agent_updated`
 // smaller sorts higher; (tier, @agent_updated ascending)
 fn tier(&self) -> u8 { match self {
     Crashed | Stalled => 0,
-    WaitingApproval   => 1,
+    Waiting   => 1,
     Running           => 2,
     Idle              => 3,
 }}
@@ -169,7 +169,7 @@ fn tier(&self) -> u8 { match self {
     next poll (FR6). `n` likewise with `n` (FR6).
   - `r` — **reply / free-text send** (FR7): opens a one-line composer at the bottom; `Enter`
     sends via `send_line(pane, text)`, `Esc` cancels. **Guard:** `r` only opens directly when
-    the selected agent is in an attention-state (`WAITING_APPROVAL | STALLED |
+    the selected agent is in an attention-state (`WAITING | STALLED |
 CRASHED`). For any non-attention state (RUNNING/IDLE) it first requires a
     confirm (`send to a non-waiting pane? y/N`) so stray input can't be injected into a busy
     agent (FR7 guard; §8 tradeoff).
@@ -205,16 +205,16 @@ the triage loop I want. (Return-semantics nuance flagged in gotchas to validate 
 **Hook snippets** — identical events to Approach A, command swapped to the binary (FR1):
 
 - Claude (`~/.claude/settings.json`): use the dedicated `PermissionRequest` event →
-  `WAITING_APPROVAL` (NOT the generic `Notification`, which also fires `idle_prompt` when an
+  `WAITING` (NOT the generic `Notification`, which also fires `idle_prompt` when an
   agent is merely idle and so mislabels idle agents as waiting — confirmed in practice);
   `UserPromptSubmit` → `RUNNING` (registration, FR1); `Stop` → `IDLE`; `SessionEnd` →
   `agentq clear` (removes the agent on exit). Elicitation/free-text prompts are folded into
-  `WAITING_APPROVAL` — there is no separate input state (a dedicated `Notification` matcher
+  `WAITING` — there is no separate input state (a dedicated `Notification` matcher
   would share the idle false-positive risk anyway).
 - Codex (`~/.codex/config.toml`, `[features] hooks = true` + trust): `PermissionRequest` →
-  `WAITING_APPROVAL`; `Stop` → `IDLE` (registration events for Codex, FR1).
+  `WAITING`; `Stop` → `IDLE` (registration events for Codex, FR1).
 - Gemini agy CLI: in scope for v1 (spec §2). Wire the same contract once its first-hook and
-  `WAITING_APPROVAL` events are confirmed (spec OQ-5). The state model already accepts `@agent_type
+  `WAITING` events are confirmed (spec OQ-5). The state model already accepts `@agent_type
 gemini`, so this is a **producer-only** addition with zero consumer change — Gemini ships as a
   fast-follow behind Claude+Codex.
 
@@ -326,13 +326,13 @@ Each must pass for both a Claude and a Codex agent (parity, spec §9).
 2. **Appear (AC1 · FR1/FR4):** wire hooks, start an agent, have it act; within one ~500ms cycle
    it shows in the dashboard. `tmux show-options -p -t <pane> -v @agent_status` reflects state.
 3. **Block + rise (AC2 · FR2/FR3/FR4):** trigger a permission prompt → row flips to
-   `WAITING_APPROVAL` and rises to its tier. Then kill another agent to a shell (after Phase 2)
+   `WAITING` and rises to its tier. Then kill another agent to a shell (after Phase 2)
    → `CRASHED` sorts **above** the waiting one, confirming the FR3 order.
 4. **Persist (AC3 · FR5):** with the dashboard up, `prefix+i` to my work, do something, `prefix+i`
    back → the dashboard is **still running** and current, not reopened.
 5. **Act in place (AC4 · FR6):** `y` → the agent's pane receives `y⏎` and proceeds; row drops to
    RUNNING. Repeat with `n`. Dashboard stays put throughout.
-6. **Reply (AC5 · FR7):** select a `WAITING_APPROVAL` agent, `r`, type a line, `Enter` → received.
+6. **Reply (AC5 · FR7):** select a `WAITING` agent, `r`, type a line, `Enter` → received.
    Then try `r` on a RUNNING row → blocked/confirmed, no stray input sent.
 7. **Jump (AC6 · FR8):** `Enter` on a row → client lands on that agent's **exact pane**;
    `prefix+i` returns to where I was.

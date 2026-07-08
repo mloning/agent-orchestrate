@@ -30,8 +30,8 @@ differ by trigger.
 |---|---|---|---|---|
 | idle | running | `UserPromptSubmit` → `RUNNING` | same | hook |
 | running | idle | `Stop` → `IDLE` | same | hook |
-| running | waiting approval *(tool permission)* | `PermissionRequest` → `WAITING_APPROVAL`; **watcher fallback** matches the on-screen prompt (`is_active_tool_prompt`, msg `"tool approval"`) for variants that fire no hook — notably the Bash command-safety / "brace expansion" confirmation | same (hook only) | hook + watcher fallback |
-| running | waiting approval *(plan prompt)* | **watcher** matches on-screen prompt text (`is_active_plan_prompt`), sets `WAITING_APPROVAL` msg `"plan approval"` | n/a | watcher only — Claude fires *no* hook for plan prompts (issue #19283) |
+| running | waiting approval *(tool permission)* | `PermissionRequest` → `WAITING`; **watcher fallback** matches the on-screen prompt (`is_active_tool_prompt`, msg `"tool approval"`) for variants that fire no hook — notably the Bash command-safety / "brace expansion" confirmation | same (hook only) | hook + watcher fallback |
+| running | waiting approval *(plan prompt)* | **watcher** matches on-screen prompt text (`is_active_plan_prompt`), sets `WAITING` msg `"plan approval"` | n/a | watcher only — Claude fires *no* hook for plan prompts (issue #19283) |
 | waiting approval | running *(approved in TUI · `y`)* | TUI optimistically sets `RUNNING` immediately | same | TUI write |
 | waiting approval | running *(approved in the pane)* | `PostToolUse` → `RUNNING` fires after the approved tool executes; watcher's "esc to interrupt" check (`looks_working`) is the fallback | same — Codex also fires `PostToolUse` | hook, watcher fallback — see below |
 | waiting approval | running *(denied in TUI · `n`)* | optimistic `RUNNING`, then real status corrects | same | TUI write |
@@ -47,7 +47,7 @@ differ by trigger.
 you press `y`/`n`/`r` **inside the TUI** — when you instead hit `Enter` to warp and
 approve in the agent's own pane, nothing writes `RUNNING`.
 
-Previously the row then stayed `WAITING_APPROVAL` until one of two fallbacks:
+Previously the row then stayed `WAITING` until one of two fallbacks:
 
 1. The watcher's next scan (≤25s) happened to catch the **"esc to interrupt"** footer in
    the live region → `RUNNING`. But for a *real* `PermissionRequest` (message is the
@@ -57,7 +57,7 @@ Previously the row then stayed `WAITING_APPROVAL` until one of two fallbacks:
 2. The turn eventually ended → `Stop` → `IDLE`.
 
 Net effect: a window of up to ~25s (sometimes lasting until the turn ended) where the row
-wrongly showed `WAITING_APPROVAL`.
+wrongly showed `WAITING`.
 
 ### Fix (implemented)
 
@@ -65,11 +65,11 @@ The complement hook that *does* fire is now wired: **`PostToolUse` → `agentq s
 RUNNING`** (`settings/claude-settings.snippet.json`, installed by
 `scripts/install-claude-hooks.sh`). `PostToolUse` fires immediately after any approved
 tool executes (and after every tool generally — which is correct, the agent *is* running
-while using tools), so it clears `WAITING_APPROVAL` within ~500ms instead of relying on
+while using tools), so it clears `WAITING` within ~500ms instead of relying on
 the 25s watcher heuristic:
 
 ```
-RUNNING → WAITING_APPROVAL (PermissionRequest) → RUNNING (PostToolUse) → IDLE (Stop)
+RUNNING → WAITING (PermissionRequest) → RUNNING (PostToolUse) → IDLE (Stop)
 ```
 
 Codex supports the same `PostToolUse` event (verified against the OpenAI Codex hooks docs

@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "agentq status WAITING_APPROVAL --type codex 2>/dev/null || true"
+            "command": "agentq status WAITING --type codex 2>/dev/null || true"
           }
         ]
       }

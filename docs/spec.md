@@ -68,11 +68,11 @@ A persistent, always-current view of my whole agent fleet that:
 | ------------------ | ------------------------------------------ | ---------- |
 | `RUNNING`          | actively working                           | no         |
 | `IDLE`             | finished its turn, awaiting next prompt    | no         |
-| `WAITING_APPROVAL` | blocked on a prompt (`y-n` permission or free-text) | **yes**    |
+| `WAITING` | blocked on a prompt (`y-n` permission or free-text) | **yes**    |
 | `STALLED`          | RUNNING but no progress past a threshold   | **yes**    |
 | `CRASHED`          | died to a bare shell / fatal error         | **yes**    |
 
-- **Attention-states** = `{WAITING_APPROVAL, STALLED, CRASHED}`. These float to
+- **Attention-states** = `{WAITING, STALLED, CRASHED}`. These float to
   the top of the dashboard (FR3); there are **no active alerts** — noticing is by glance.
 - An agent is identified by its **tmux pane**. When the pane dies, its entry disappears (no
   stale rows).
@@ -89,7 +89,7 @@ Numbered for traceability — the implementation plan should map each step to an
   attention-states must not hide the rest. Each row shows at least: agent type
   (claude/codex/gemini), state, location (`session:window`), age/time-in-state, and a short message.
 - **FR3 — Priority ordering.** Rows are sorted by tier, top to bottom:
-  `CRASHED/STALLED` → `WAITING_APPROVAL` → `RUNNING` → `IDLE`.
+  `CRASHED/STALLED` → `WAITING` → `RUNNING` → `IDLE`.
   Within a tier, oldest-waiting first (tie-break; see OQ-2).
 - **FR4 — Live updates.** The view reflects state changes automatically and near-real-time —
   no manual refresh, no reopening to see current state.
@@ -150,7 +150,7 @@ CLI** (parity). Gemini parity is gated on its hook support (OQ-5): until confirm
 Codex parity is the v1 bar and Gemini is a fast-follow that reuses these same scenarios.
 
 1. **Appear:** start an agent and have it act → it shows up within one update cycle. _(FR1, FR4)_
-2. **Block + rise:** trigger a permission prompt → row flips to `WAITING_APPROVAL` and rises to
+2. **Block + rise:** trigger a permission prompt → row flips to `WAITING` and rises to
    the correct tier within one update cycle. _(FR2, FR3, FR4)_
 3. **Persist:** with the dashboard open, switch to another session and back → it's still open
    and showing current state, not closed. _(FR5)_
@@ -172,7 +172,7 @@ Codex parity is the v1 bar and Gemini is a fast-follow that reuses these same sc
 - **OQ-4** — Persistent-surface mechanism (dedicated tmux window vs session vs status-line
   widget) is an **approach-level** decision, resolved in the plan, not here.
 - **OQ-5** — **Gemini agy CLI hook mapping:** which Gemini hook events map to our states
-  (registration / `RUNNING` / `IDLE` / `WAITING_APPROVAL`), and whether its
+  (registration / `RUNNING` / `IDLE` / `WAITING`), and whether its
   hook surface is rich enough for full parity. _Default: confirm during build; ship Claude +
   Codex first and add Gemini as a fast-follow._
 
@@ -231,7 +231,7 @@ by every listed tool, so it is folded into FR4/FR5 rather than given its own col
 ### 12.3 The spec is buildable from existing primitives (high confidence)
 
 - **Claude Code hooks** cover registration + attention-states: `SessionStart`→register;
-  `Notification`(`permission_prompt`/`idle_prompt`)→`WAITING_APPROVAL`;
+  `Notification`(`permission_prompt`/`idle_prompt`)→`WAITING`;
   `Stop`/`SessionEnd`→`IDLE`/gone. _Caveat:_ the documented `notification_type` field is missing
   in practice (GitHub #11964, closed "not planned") — **match on message text**, not the field.
 - **tmux** supplies what hooks can't: `capture-pane -p -S/-E` reads any pane (even detached —

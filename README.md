@@ -6,7 +6,7 @@ A persistent, live-updating tmux dashboard for triaging AI coding agents
 ## What it does
 
 - **Fleet visibility** — shows all registered agents with type, status, location, age, and message
-- **Priority sorting** — attention-states (CRASHED, WAITING_APPROVAL) float to the top
+- **Priority sorting** — attention-states (CRASHED, WAITING) float to the top
 - **Live updates** — polls tmux state every ~500ms, no manual refresh needed
 - **Act in place** — approve (`y`), deny (`n`), or free-text reply (`r`) without leaving the dashboard
 - **Exact-pane warp** — `Enter` jumps to the agent's precise tmux pane; `prefix+i` returns
@@ -55,7 +55,7 @@ agentq open
 #   q              — return to previous pane
 
 # Manually set agent status (used by hooks, not typically called directly)
-agentq status WAITING_APPROVAL "permission requested"
+agentq status WAITING "permission requested"
 agentq status RUNNING "working on task"
 agentq status IDLE "finished"
 ```
@@ -96,7 +96,7 @@ gets cleared re-registers on its next hook.
 |-------|------|-------|---------|
 | CRASHED | 0 | Red | Agent died to bare shell |
 | STALLED | 0 | Red | No progress past threshold |
-| WAITING_APPROVAL | 1 | Yellow | Blocked on a prompt (y/n or free-text) |
+| WAITING | 1 | Yellow | Blocked on a prompt (y/n or free-text) |
 | RUNNING | 2 | Green | Actively working |
 | IDLE | 3 | Gray | Finished, awaiting next prompt |
 

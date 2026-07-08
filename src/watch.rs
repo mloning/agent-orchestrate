@@ -23,7 +23,7 @@ const CAPTURE_LINES: u32 = 40;
 /// this window (but stay in the wider `CAPTURE_LINES` scrollback). Scoping
 /// detection to the live region is what keeps a marker left in scrollback from
 /// re-triggering — the bug where a resumed agent snapped back to
-/// WAITING_APPROVAL, and the bug where a tool-call's traceback in scrollback
+/// WAITING, and the bug where a tool-call's traceback in scrollback
 /// was read as the agent itself crashing.
 const LIVE_REGION_LINES: usize = 8;
 
@@ -83,7 +83,7 @@ const PLAN_APPROVAL_MSG: &str = "plan approval";
 /// Claude tool-permission prompt text. Deliberately distinct from the plan
 /// prompt's "Would you like to proceed?" wording (`PLAN_PROMPT_MARKERS`) so the
 /// two never cross-match. Normally the `PermissionRequest` hook flips these to
-/// `WAITING_APPROVAL`, but the watcher scrapes for them too as a fallback for
+/// `WAITING`, but the watcher scrapes for them too as a fallback for
 /// prompt variants that fire NO hook — notably the Bash command-safety
 /// confirmation (the "brace expansion" / command-injection warning), which
 /// leaves the pane stuck at RUNNING with a live prompt on screen. Claude-only.
@@ -193,46 +193,46 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
         // OQ-3 default yes), so the watcher detects it from the on-screen prompt.
         // Detection is scoped to the LIVE region (`is_active_plan_prompt`) so an
         // answered prompt lingering in scrollback never re-triggers — the bug
-        // where a resumed agent snapped back to WAITING_APPROVAL.
+        // where a resumed agent snapped back to WAITING.
         if agent.agent_type == "claude"
-            && agent.status != Status::WaitingApproval
+            && agent.status != Status::Waiting
             && is_active_plan_prompt(&tail)
         {
             log(&format!(
-                "WAITING_APPROVAL {} ({}, {}) — plan-approval prompt",
+                "WAITING {} ({}, {}) — plan-approval prompt",
                 agent.pane_id, agent.agent_type, agent.location
             ));
-            let _ = set(agent, Status::WaitingApproval, PLAN_APPROVAL_MSG, now);
+            let _ = set(agent, Status::Waiting, PLAN_APPROVAL_MSG, now);
             continue;
         }
 
         // Raise a Claude tool-permission prompt that no hook reported. Normally
-        // `PermissionRequest` → WAITING_APPROVAL covers these within ~500ms, but
+        // `PermissionRequest` → WAITING covers these within ~500ms, but
         // some prompt variants fire no hook — notably the Bash command-safety
         // confirmation (the "brace expansion" warning) — leaving the pane stuck
         // at RUNNING with a live prompt on screen (the reported gap). Mirrors the
         // plan branch: scoped to the LIVE region so an answered prompt in
         // scrollback never re-triggers, and it never overwrites an existing
-        // WAITING_APPROVAL, so a hook-set wait keeps its project-name message.
+        // WAITING, so a hook-set wait keeps its project-name message.
         // The `!looks_working` guard makes it strictly safe: a real prompt shows
         // no interrupt hint, so this only skips a working pane that happens to
         // echo the phrase in its live output — a missed raise, never a false one.
         if agent.agent_type == "claude"
-            && agent.status != Status::WaitingApproval
+            && agent.status != Status::Waiting
             && is_active_tool_prompt(&tail)
             && !looks_working(&tail)
         {
             log(&format!(
-                "WAITING_APPROVAL {} ({}, {}) — tool-permission prompt",
+                "WAITING {} ({}, {}) — tool-permission prompt",
                 agent.pane_id, agent.agent_type, agent.location
             ));
-            let _ = set(agent, Status::WaitingApproval, TOOL_APPROVAL_MSG, now);
+            let _ = set(agent, Status::Waiting, TOOL_APPROVAL_MSG, now);
             continue;
         }
 
         // Resume a stale approval wait. Neither a plan approval nor a tool
         // permission fires a "granted" hook, so a prompt answered in the agent's
-        // own pane would otherwise sit at WAITING_APPROVAL until the turn ends.
+        // own pane would otherwise sit at WAITING until the turn ends.
         // Two kinds of safe signal, both confined to the LIVE region so a marker
         // left in scrollback can't fire a false resume:
         //   - the agent is visibly working again (interrupt-hint footer), or
@@ -243,7 +243,7 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
         // prompt is up — so the failure direction is a missed resume, not a
         // missed prompt. A real PermissionRequest wait still showing its prompt
         // matches neither signal and stays put.
-        if agent.status == Status::WaitingApproval {
+        if agent.status == Status::Waiting {
             let working = looks_working(&tail);
             // Auto-resume purely on the prompt disappearing is safe ONLY for the
             // waits the watcher itself raised (identified by sentinel msg); a real
@@ -494,7 +494,7 @@ mod tests {
         // The prompt was answered and the agent resumed; the markers have
         // scrolled up out of the live region even though they remain in the
         // wider capture. This is the regression that caused a running agent to
-        // snap back to WAITING_APPROVAL.
+        // snap back to WAITING.
         let mut lines = vec!["Ready to code?", "❯ 1. Yes", "  2. No, keep planning"];
         for _ in 0..LIVE_REGION_LINES {
             lines.push("⏺ working on the plan…");

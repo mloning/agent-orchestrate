@@ -7,7 +7,7 @@
 # ({ "hooks": { "<Event>": [ { "hooks": [ { type, command } ] } ] } }), so this
 # mirrors install-claude-hooks.sh but targets hooks.json with Codex events:
 #   UserPromptSubmit  -> RUNNING
-#   PermissionRequest -> WAITING_APPROVAL
+#   PermissionRequest -> WAITING
 #   PostToolUse       -> RUNNING
 #   Stop              -> IDLE
 #
@@ -40,7 +40,7 @@ usage() {
   cat <<'EOF'
 install-codex-hooks.sh — safely merge agentq's hooks into Codex CLI's hooks.json.
 
-Maps UserPromptSubmit -> RUNNING, PermissionRequest -> WAITING_APPROVAL,
+Maps UserPromptSubmit -> RUNNING, PermissionRequest -> WAITING,
 PostToolUse -> RUNNING, Stop -> IDLE. Follows symlinks, is idempotent, backs up, validates JSON, and
 writes atomically. Codex hooks require trust: the next `codex` launch will prompt
 you to review and trust them, or they won't run.
@@ -134,10 +134,10 @@ HOOKS="$(jq -n --arg bin "$AGENTQ_BIN" '
                  command: ("\"" + $bin + "\" summarize --type codex 2>/dev/null || true") } ] };
   {
     UserPromptSubmit:  [ cmd("RUNNING") ],
-    PermissionRequest: [ ({ matcher: "" } + cmd("WAITING_APPROVAL")) ],
+    PermissionRequest: [ ({ matcher: "" } + cmd("WAITING")) ],
     # PostToolUse fires after any approved tool executes — the only signal that a
     # permission granted in Codex`s own pane was answered (there is no
-    # PermissionGranted hook), so it clears a stuck WAITING_APPROVAL back to
+    # PermissionGranted hook), so it clears a stuck WAITING back to
     # RUNNING without waiting on the watcher.
     PostToolUse:       [ ({ matcher: "" } + cmd("RUNNING")) ],
     Stop:              [ cmd("IDLE"), summarize_cmd ]
@@ -161,7 +161,7 @@ merged="$(printf '%s' "$current" | jq --argjson snip "$HOOKS" '
     [ (.command // empty), ((.hooks // [])[] | .command // empty) ]
     | any(. as $c
           | ($c | test("agentq"))
-            and ($c | test("status (RUNNING|WAITING_APPROVAL|IDLE|CRASHED|STALLED)|\\bclear\\b|\\bsummarize\\b")));
+            and ($c | test("status (RUNNING|WAITING|IDLE|CRASHED|STALLED)|\\bclear\\b|\\bsummarize\\b")));
   .hooks = (.hooks // {})
   | .hooks |= with_entries(.value |= map(select(is_ours | not)))
   | reduce ($snip | to_entries[]) as $e (.;
@@ -200,7 +200,7 @@ trap - EXIT
 # --- verify ----------------------------------------------------------------
 ok=1
 for pair in "UserPromptSubmit:status RUNNING" \
-            "PermissionRequest:status WAITING_APPROVAL" \
+            "PermissionRequest:status WAITING" \
             "PostToolUse:status RUNNING" \
             "Stop:status IDLE" \
             "Stop:summarize"; do
