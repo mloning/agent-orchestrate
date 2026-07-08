@@ -86,6 +86,13 @@ Remaining caveats:
   live tool-permission prompt (`is_active_tool_prompt`, "Do you want to proceed?") as a
   fallback and auto-resumes it (msg `"tool approval"`) once the prompt clears — mirroring
   the plan-prompt path. Cost: up to ~25s of watcher lag before an un-hooked prompt shows.
+- The watcher scopes prompt detection to the pane's **live region** (bottom
+  `LIVE_REGION_LINES`). When a **task list** is active, Claude pins its panel (an
+  `N tasks (…)` header plus `◼`/`◻` items) to the very bottom of the pane — *below* the
+  prompt box — pushing the prompt's markers out of that window. That left an un-hooked
+  prompt (or any plan prompt) undetected, so the row stayed `RUNNING` and dropped out of
+  the attention tier instead of showing `WAITING`. `live_region` now peels a trailing task
+  panel off first (`trim_trailing_task_panel`), so the prompt lands back in the live region.
 - For Codex, the watcher's `looks_working` ("Esc to interrupt") check remains the
   fallback for any case where `PostToolUse` doesn't fire (e.g. an approval that runs no
   subsequent tool).

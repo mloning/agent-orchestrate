@@ -95,6 +95,13 @@ const TOOL_PROMPT_MARKERS: &[&str] = &["Do you want to proceed?"];
 /// wait (message is the project name; stays until the human answers it).
 const TOOL_APPROVAL_MSG: &str = "tool approval";
 
+/// Task-status glyphs Claude leads each item of its persistent task-list panel
+/// with (`◼` in progress, `◻` open, plus close variants). Used only to recognize
+/// the panel so it can be peeled off the bottom of a capture — see
+/// `trim_trailing_task_panel`. Kept lenient so a glyph tweak degrades to a missed
+/// strip (old behavior), never a false one.
+const TASK_GLYPHS: &[&str] = &["◻", "◼", "◧", "◨", "◫", "☐", "☒", "☑", "✔", "✓", "●", "○"];
+
 /// "Actively working" footer markers — the interrupt hint agents render only
 /// while a turn is running, never while a prompt awaits input. Matched
 /// case-insensitively so both Claude's `esc to interrupt` and Codex's
@@ -377,11 +384,74 @@ fn looks_errored(tail: &str) -> bool {
     API_ERROR_MARKERS.iter().any(|m| live.contains(m)) && !looks_working(tail)
 }
 
-/// The bottom `LIVE_REGION_LINES` of a capture, joined back into one string.
+/// The bottom `LIVE_REGION_LINES` of a capture, joined back into one string —
+/// after peeling off a trailing task-list panel (see `trim_trailing_task_panel`).
 fn live_region(tail: &str) -> String {
-    let lines: Vec<&str> = tail.lines().collect();
+    let mut lines: Vec<&str> = tail.lines().collect();
+    trim_trailing_task_panel(&mut lines);
     let start = lines.len().saturating_sub(LIVE_REGION_LINES);
     lines[start..].join("\n")
+}
+
+/// Peel Claude's persistent task-list panel off the bottom of a capture.
+///
+/// When a task list is active, Claude pins it to the very bottom of the pane —
+/// BELOW a live permission/plan prompt box. That panel (an `N tasks (…)` header
+/// plus one `◼`/`◻` line per item) pushes the prompt's markers up out of the
+/// bottom `LIVE_REGION_LINES` window, so the watcher never saw the prompt and
+/// left the pane stuck at RUNNING: the reported gap where an agent with a task
+/// list drops out of the attention tier instead of showing WAITING. The panel is
+/// persistent chrome, not fresh agent output, so peeling it off before scoping
+/// the live region drops the prompt back into it. It also sharpens the answered-
+/// prompt check (fresh `⏺` output below a scrolled-up prompt still reads as
+/// inactive, because the panel — not that output — is what got trimmed).
+///
+/// Conservative by construction: we strip ONLY a trailing run of panel lines that
+/// terminates in the panel HEADER with at least one item line below it. A run
+/// that doesn't (an unrecognized glyph, or a lone header-like line that is really
+/// agent output) is left untouched — a missed strip degrades to the old behavior,
+/// never a false prompt. Crash/shell detection is unaffected: it reads the full
+/// capture, and a crashed pane has no live panel to strip anyway.
+fn trim_trailing_task_panel(lines: &mut Vec<&str>) {
+    let mut i = lines.len();
+    let mut items = 0usize;
+    while i > 0 {
+        let line = lines[i - 1].trim();
+        if line.is_empty() {
+            i -= 1;
+            continue;
+        }
+        if is_task_item_line(line) {
+            i -= 1;
+            items += 1;
+            continue;
+        }
+        // First non-blank, non-item line: strip iff it's the header opening a
+        // panel we actually saw items under.
+        if items > 0 && is_task_header_line(line) {
+            lines.truncate(i - 1);
+        }
+        return;
+    }
+}
+
+/// The task-panel header, e.g. `8 tasks (3 done, 1 in progress, 4 open)`: a
+/// leading count followed by the `task(s) (…)` breakdown. `line` is pre-trimmed.
+fn is_task_header_line(line: &str) -> bool {
+    let counted = line
+        .split_whitespace()
+        .next()
+        .is_some_and(|w| w.parse::<u32>().is_ok());
+    counted && (line.contains("tasks (") || line.contains("task (")) && line.contains(')')
+}
+
+/// A line inside the task panel: an item led by a status glyph, or the
+/// `… +N completed` continuation Claude renders when the list is truncated.
+/// `line` is pre-trimmed.
+fn is_task_item_line(line: &str) -> bool {
+    line.starts_with('…')
+        || line.starts_with("...")
+        || TASK_GLYPHS.iter().any(|g| line.starts_with(g))
 }
 
 fn set(agent: &Agent, status: Status, msg: &str, now: u64) -> Result<()> {
@@ -543,6 +613,91 @@ mod tests {
         let tail = lines.join("\n");
         assert!(is_tool_prompt(&tail)); // still present in the full capture
         assert!(!is_active_tool_prompt(&tail)); // …but no longer the live prompt
+    }
+
+    #[test]
+    fn tool_prompt_under_a_task_panel_is_still_active() {
+        // Reported bug: a Bash command-safety confirmation with Claude's task-list
+        // panel pinned BELOW it. The panel pushes "Do you want to proceed?" out of
+        // the bottom LIVE_REGION_LINES, so the watcher missed the prompt and the
+        // pane dropped out of the attention tier instead of showing WAITING.
+        let tail = "earlier agent output\n\
+                    Ask rule Bash(python3 -c *) overrides auto mode for this command.\n\
+                    /permissions to let auto mode decide\n\
+                    \n\
+                    Do you want to proceed?\n\
+                    ❯ 1. Yes\n\
+                    \x20\x202. No\n\
+                    \n\
+                    Esc to cancel · Tab to amend · ctrl+e to explain\n\
+                    \n\
+                    \x20\x208 tasks (3 done, 1 in progress, 4 open)\n\
+                    \x20\x20◼ Update SageMaker Dockerfile to use uv\n\
+                    \x20\x20◻ Update pre-commit config\n\
+                    \x20\x20◻ Update README.md and AGENTS.md\n\
+                    \x20\x20◻ Update run_local.sh scripts\n\
+                    \x20\x20◻ Verify migration end to end\n\
+                    \x20\x20\x20… +3 completed";
+        // Without the panel-strip the prompt sits ~13 lines up and is missed.
+        assert!(is_active_tool_prompt(&tail));
+        assert!(!looks_working(&tail)); // footer is "esc to cancel", not "interrupt"
+        assert!(!looks_crashed(&tail)); // a prompt under a task list is not a crash
+    }
+
+    #[test]
+    fn plan_prompt_under_a_task_panel_is_still_active() {
+        // Same panel-below-prompt layout, but for a plan-approval prompt (which
+        // fires no hook at all, so the watcher is the only detector).
+        let tail = "here is the plan\n\
+                    Would you like to proceed?\n\
+                    ❯ 1. Yes\n\
+                    \x20\x202. No, keep planning\n\
+                    \n\
+                    \x20\x203 tasks (0 done, 1 in progress, 2 open)\n\
+                    \x20\x20◼ Draft the plan\n\
+                    \x20\x20◻ Get approval\n\
+                    \x20\x20◻ Implement";
+        assert!(is_active_plan_prompt(&tail));
+    }
+
+    #[test]
+    fn answered_prompt_under_a_task_panel_stays_inactive() {
+        // The prompt was answered: its box is gone and fresh `⏺` output renders,
+        // with the task panel pinned below. Stripping the panel reveals the fresh
+        // output — not the scrolled-up prompt — so it must NOT re-trigger WAITING.
+        let mut lines = vec!["Do you want to proceed?", "❯ 1. Yes", "  2. No"];
+        for _ in 0..LIVE_REGION_LINES {
+            lines.push("⏺ running the approved command…");
+        }
+        lines.push("  5 tasks (2 done, 1 in progress, 2 open)");
+        lines.push("  ◼ Do the thing");
+        lines.push("  ◻ Next thing");
+        lines.push("   … +2 completed");
+        let tail = lines.join("\n");
+        assert!(is_tool_prompt(&tail)); // still in the full capture…
+        assert!(!is_active_tool_prompt(&tail)); // …but not live after the panel-strip
+    }
+
+    #[test]
+    fn task_panel_helpers_recognize_and_reject() {
+        assert!(is_task_header_line("8 tasks (3 done, 1 in progress, 4 open)"));
+        assert!(is_task_header_line("1 task (0 done, 1 in progress, 0 open)"));
+        assert!(!is_task_header_line("Ready to code?"));
+        assert!(!is_task_header_line("running 3 tasks now")); // no leading count
+        assert!(is_task_item_line("◼ in progress item"));
+        assert!(is_task_item_line("◻ open item"));
+        assert!(is_task_item_line("… +3 completed"));
+        assert!(!is_task_item_line("Do you want to proceed?"));
+    }
+
+    #[test]
+    fn lone_header_like_line_is_not_stripped() {
+        // A header-like line with no item lines below is treated as ordinary
+        // agent output, not a panel — so nothing is trimmed.
+        let mut lines = vec!["some analysis", "there are 8 tasks (roughly) to do"];
+        let before = lines.clone();
+        trim_trailing_task_panel(&mut lines);
+        assert_eq!(lines, before);
     }
 
     #[test]
