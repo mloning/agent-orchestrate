@@ -48,13 +48,22 @@ const AGENT_CHROME: &[&str] = &[
 /// region (see `looks_crashed`): agents routinely run tools that print a stack
 /// trace as ordinary output (`python -c …`, a failing test), then read it and
 /// keep working — that trace belongs in scrollback, not the bottom of the pane.
+///
+/// Matched line-anchored (`line_is_crash_signature`), NOT as a bare substring:
+/// every real signature LEADS its line — the shell/runtime prints it at column 0
+/// (`bash: x: command not found`, `Traceback (most recent call last):`,
+/// `panic: …`). Agents, by contrast, discuss these same phrases mid-sentence in
+/// their prose and end-of-turn `※ recap:` line (`Fixed the command not found
+/// error`); a bare-substring match read that prose as the agent itself crashing
+/// (the reported false positive, NFR7). Bare `command not found` / `core dumped`
+/// are intentionally absent: they never lead a line, and their real forms are
+/// already caught here — `bash:`/`zsh:` lead a shell's not-found error, and
+/// `Segmentation fault`/`Aborted (core dumped)` lead the dump line.
 const CRASH_SIGNATURES: &[&str] = &[
     "Traceback (most recent call last):",
     "node:internal/",
     "npm ERR!",
-    "command not found",
     "Segmentation fault",
-    "core dumped",
     "panic:",
     "fatal runtime error",
     "zsh:",
@@ -315,15 +324,29 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
 /// flagged those healthy panes as crashed (the reported false positive). The
 /// chrome veto stays wide (full capture): chrome anywhere is strong proof the
 /// TUI is alive, so we err toward NOT flagging a live agent.
+///
+/// Within the live region, signatures are matched line-anchored (see
+/// `line_is_crash_signature`), so an agent describing a crash phrase in its own
+/// prose — mid-sentence, or in its `※ recap:` line — is not itself read as a
+/// crash (NFR7).
 fn looks_crashed(tail: &str) -> bool {
     if AGENT_CHROME.iter().any(|m| tail.contains(m)) {
         return false;
     }
-    let live = live_region(tail);
-    if CRASH_SIGNATURES.iter().any(|m| live.contains(m)) {
+    if live_region(tail).lines().any(line_is_crash_signature) {
         return true;
     }
     looks_like_bare_shell(tail)
+}
+
+/// A captured line is a crash/exit signature only when it *leads* with one.
+/// Real shell and runtime errors begin the line (the shell writes them at
+/// column 0); agents mention the same phrases mid-sentence in their prose and
+/// recap, where they never lead. Leading whitespace is ignored so an indented
+/// line still matches.
+fn line_is_crash_signature(line: &str) -> bool {
+    let line = line.trim_start();
+    CRASH_SIGNATURES.iter().any(|s| line.starts_with(s))
 }
 
 /// Heuristic bare-shell detection on the last non-empty line. Fish-aware: the
@@ -525,6 +548,36 @@ mod tests {
         let tail = lines.join("\n");
         assert!(tail.contains("Traceback (most recent call last):")); // in the capture…
         assert!(!looks_crashed(&tail)); // …but not in the live region → not a crash
+    }
+
+    #[test]
+    fn agent_recap_mentioning_a_crash_phrase_is_not_a_crash() {
+        // Reported false positive: the agent FIXED a `command not found` bug and
+        // said so — in its end-of-turn summary AND its `※ recap:` line, both of
+        // which land in the live region. A bare-substring match on
+        // "command not found" read that prose as the agent itself crashing. The
+        // phrase never LEADS a line here (it sits mid-sentence / in backticks),
+        // so line-anchored matching must not flag it.
+        let tail = "\u{23fa} Fixed and verified. uv run spookey now resolves (exit 0) — \
+                    the command not found failure at utils.sh:15 is gone.\n\
+                    \n\
+                    \u{273b} Cooked for 4m 45s\n\
+                    \n\
+                    \u{203b} recap: Goal: get run_local.sh working. Fixed the \
+                    `spookey: command not found` error by using `uv run spookey`.\n\
+                    \x20\x20Next: re-run the experiment, then commit. (disable recaps in /config)";
+        assert!(tail.contains("command not found")); // present in the live region…
+        assert!(!looks_crashed(tail)); // …but only as prose, never leading a line
+    }
+
+    #[test]
+    fn real_shell_command_not_found_is_still_a_crash() {
+        // A genuine drop-to-shell: the shell writes the not-found error at the
+        // start of the line. The `bash:`/`zsh:` prefixes (which lead such lines)
+        // catch it, so dropping the bare "command not found" signature loses no
+        // real detection.
+        assert!(looks_crashed("running the agent\nbash: spookey: command not found"));
+        assert!(looks_crashed("running the agent\nzsh: command not found: spookey"));
     }
 
     #[test]
