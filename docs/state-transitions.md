@@ -93,6 +93,10 @@ Remaining caveats:
   prompt (or any plan prompt) undetected, so the row stayed `RUNNING` and dropped out of
   the attention tier instead of showing `WAITING`. `live_region` now peels a trailing task
   panel off first (`trim_trailing_task_panel`), so the prompt lands back in the live region.
+  The same window is also blown by the prompt's own **`(ctrl+b … to run in background)`
+  hint footer** — several such lines can render below `Esc to cancel …` (observed as four
+  under a 5-agent run), again pushing `Do you want to proceed?` out. `live_region` peels
+  that footer too (`trim_trailing_bg_hints`), looping until both chrome blocks are gone.
 - For Codex, the watcher's `looks_working` ("Esc to interrupt") check remains the
   fallback for any case where `PostToolUse` doesn't fire (e.g. an approval that runs no
   subsequent tool).

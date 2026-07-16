@@ -111,6 +111,15 @@ const TOOL_APPROVAL_MSG: &str = "tool approval";
 /// strip (old behavior), never a false one.
 const TASK_GLYPHS: &[&str] = &["◻", "◼", "◧", "◨", "◫", "☐", "☒", "☑", "✔", "✓", "●", "○"];
 
+/// Substring identifying Claude's "run in background" hint footer, e.g.
+/// `(ctrl+b ctrl+b (twice) to run in background)`. Claude pins this hint to the
+/// very bottom of the pane while a command (or its permission prompt) is live —
+/// sometimes several lines of it. Used only to peel that footer off a capture
+/// so a prompt above it lands back in the live region — see
+/// `trim_trailing_bg_hints`. Kept lenient so a wording tweak degrades to a
+/// missed strip (old behavior), never a false one.
+const BG_HINT_MARKER: &str = "run in background";
+
 /// "Actively working" footer markers — the interrupt hint agents render only
 /// while a turn is running, never while a prompt awaits input. Matched
 /// case-insensitively so both Claude's `esc to interrupt` and Codex's
@@ -408,12 +417,72 @@ fn looks_errored(tail: &str) -> bool {
 }
 
 /// The bottom `LIVE_REGION_LINES` of a capture, joined back into one string —
-/// after peeling off a trailing task-list panel (see `trim_trailing_task_panel`).
+/// after peeling off trailing chrome that Claude pins BELOW a live prompt box:
+/// a task-list panel (`trim_trailing_task_panel`) and/or the "run in background"
+/// hint footer (`trim_trailing_bg_hints`). Either can push the prompt's markers
+/// up out of the fixed bottom window; peeling them drops the prompt back into it.
 fn live_region(tail: &str) -> String {
     let mut lines: Vec<&str> = tail.lines().collect();
-    trim_trailing_task_panel(&mut lines);
+    // Peel in a loop: the two chrome blocks can stack (in either order) at the
+    // bottom, and stripping one can expose the other. Each peel only shrinks the
+    // vec, so this reaches a fixed point and terminates.
+    loop {
+        let before = lines.len();
+        trim_trailing_bg_hints(&mut lines);
+        trim_trailing_task_panel(&mut lines);
+        if lines.len() == before {
+            break;
+        }
+    }
     let start = lines.len().saturating_sub(LIVE_REGION_LINES);
     lines[start..].join("\n")
+}
+
+/// Peel Claude's "run in background" hint footer off the bottom of a capture.
+///
+/// While a foreground command runs — or while its permission prompt is up —
+/// Claude pins a `(ctrl+b … to run in background)` hint to the very bottom of
+/// the pane, sometimes several lines of it (observed as four lines under a
+/// 5-agent run). Like the task panel, that footer pushes a live prompt's markers
+/// up out of the bottom `LIVE_REGION_LINES` window, so an un-hooked tool/plan
+/// prompt went undetected and the pane stayed RUNNING instead of flipping to
+/// WAITING: the reported gap where a `curl` command-safety confirmation, rendered
+/// below the prompt's `Esc to cancel …` line, was never seen.
+///
+/// Conservative like `trim_trailing_task_panel`: strips ONLY a trailing run of
+/// hint lines (blank lines between them tolerated); the first non-hint line
+/// stops the peel, so a missed strip degrades to the old behavior. It cannot
+/// manufacture a false prompt — the hint renders only while a command/prompt is
+/// live, and the tool-prompt branch is additionally gated by `!looks_working`.
+fn trim_trailing_bg_hints(lines: &mut Vec<&str>) {
+    let mut i = lines.len();
+    let mut hints = 0usize;
+    while i > 0 {
+        let line = lines[i - 1].trim();
+        if line.is_empty() {
+            i -= 1;
+            continue;
+        }
+        if is_bg_hint_line(line) {
+            i -= 1;
+            hints += 1;
+            continue;
+        }
+        break;
+    }
+    // Truncate only when we actually saw hints, so a run of trailing blanks alone
+    // (or nothing) leaves the capture untouched.
+    if hints > 0 {
+        lines.truncate(i);
+    }
+}
+
+/// A "run in background" hint line, e.g. `(ctrl+b ctrl+b (twice) to run in
+/// background)`. Anchored to a leading `(` so agent prose that merely mentions
+/// running something in the background is not mistaken for the footer chrome.
+/// `line` is pre-trimmed.
+fn is_bg_hint_line(line: &str) -> bool {
+    line.starts_with('(') && line.contains(BG_HINT_MARKER)
 }
 
 /// Peel Claude's persistent task-list panel off the bottom of a capture.
@@ -741,6 +810,79 @@ mod tests {
         assert!(is_task_item_line("◻ open item"));
         assert!(is_task_item_line("… +3 completed"));
         assert!(!is_task_item_line("Do you want to proceed?"));
+    }
+
+    #[test]
+    fn tool_prompt_under_bg_hint_footer_is_still_active() {
+        // Reported bug: a Bash command-safety confirmation whose OWN footer runs
+        // long — below "Esc to cancel …" sit four "(ctrl+b … to run in
+        // background)" hint lines (one per running agent). Those push "Do you
+        // want to proceed?" ~10 lines up, past the bottom LIVE_REGION_LINES=8
+        // window, so the watcher missed the prompt and the pane stayed RUNNING
+        // instead of showing WAITING. The task-tool spinner ("Running 5 agents…")
+        // is at the TOP here, so trim_trailing_task_panel does not apply.
+        let tail = "⏺ Running 5 agents… (ctrl+o to expand)\n\
+                    \x20\x20\x20└ Farrow structure and fractional delay · 16 tool uses · 97.5k tokens\n\
+                    \x20\x20\x20\x20\x20⎿  Web Search: \"Splitting the unit delay\"…\n\
+                    \n\
+                    \x20Bash command · from the general-purpose agent\n\
+                    \n\
+                    \x20\x20\x20cd \"/private/tmp/…/scratchpad\"\n\
+                    \x20\x20\x20curl -sL \"https://…\" -o lin_freq.html\n\
+                    \x20\x20\x20Run shell command\n\
+                    \n\
+                    \x20Permission rule Bash(curl *) requires confirmation for this command.\n\
+                    \n\
+                    \x20Do you want to proceed?\n\
+                    \x20❯ 1. Yes\n\
+                    \x20\x20\x202. Yes, and don't ask again for: echo …\n\
+                    \x20\x20\x203. No\n\
+                    \n\
+                    \x20Esc to cancel · Tab to amend · ctrl+e to explain\n\
+                    \x20\x20\x20\x20\x20(ctrl+b ctrl+b (twice) to run in background)\n\
+                    \x20\x20\x20\x20\x20(ctrl+b ctrl+b (twice) to run in background)\n\
+                    \x20\x20\x20\x20\x20(ctrl+b ctrl+b (twice) to run in background)\n\
+                    \x20\x20\x20\x20\x20(ctrl+b ctrl+b (twice) to run in background)";
+        assert!(is_active_tool_prompt(&tail));
+        assert!(!looks_working(&tail)); // footer is "esc to cancel", not "interrupt"
+        assert!(!looks_crashed(&tail)); // a prompt under a hint footer is not a crash
+    }
+
+    #[test]
+    fn answered_prompt_under_bg_hint_footer_stays_inactive() {
+        // The prompt was answered: its box is gone and fresh `⏺` output renders,
+        // with a background-hint footer pinned below (the approved command is now
+        // running in the background). Peeling the hints must reveal that fresh
+        // output — not the scrolled-up prompt — so it must NOT re-trigger WAITING.
+        let mut lines = vec!["Do you want to proceed?", "❯ 1. Yes", "  2. No"];
+        for _ in 0..LIVE_REGION_LINES {
+            lines.push("⏺ running the approved command…");
+        }
+        lines.push("  (ctrl+b to run in background)");
+        lines.push("  (ctrl+b to run in background)");
+        let tail = lines.join("\n");
+        assert!(is_tool_prompt(&tail)); // still in the full capture…
+        assert!(!is_active_tool_prompt(&tail)); // …but not live after the hint-strip
+    }
+
+    #[test]
+    fn bg_hint_helpers_recognize_and_reject() {
+        assert!(is_bg_hint_line("(ctrl+b ctrl+b (twice) to run in background)"));
+        assert!(is_bg_hint_line("(ctrl+b to run in background)"));
+        // Agent prose mentioning the phrase must not be mistaken for the footer.
+        assert!(!is_bg_hint_line("I'll run in background so it doesn't block"));
+        assert!(!is_bg_hint_line("Do you want to proceed?"));
+    }
+
+    #[test]
+    fn trailing_bg_hints_alone_are_peeled() {
+        let mut lines = vec![
+            "Do you want to proceed?",
+            "  (ctrl+b to run in background)",
+            "  (ctrl+b to run in background)",
+        ];
+        trim_trailing_bg_hints(&mut lines);
+        assert_eq!(lines, vec!["Do you want to proceed?"]);
     }
 
     #[test]
