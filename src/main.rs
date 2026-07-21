@@ -20,7 +20,7 @@ struct Cli {
 enum Command {
     /// Hook target; tags the current pane with a status
     Status {
-        /// The status to set (e.g. RUNNING, CRASHED, IDLE)
+        /// The status to set (e.g. RUNNING, WAITING, IDLE)
         status: String,
         /// Optional message to attach
         #[arg(default_value = "")]

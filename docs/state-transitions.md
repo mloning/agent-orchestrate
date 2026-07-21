@@ -35,8 +35,9 @@ differ by trigger.
 | waiting approval | running *(approved in TUI · `y`)* | TUI optimistically sets `RUNNING` immediately | same | TUI write |
 | waiting approval | running *(approved in the pane)* | `PostToolUse` → `RUNNING` fires after the approved tool executes; watcher's "esc to interrupt" check (`looks_working`) is the fallback | same — Codex also fires `PostToolUse` | hook, watcher fallback — see below |
 | waiting approval | running *(denied in TUI · `n`)* | optimistic `RUNNING`, then real status corrects | same | TUI write |
-| running | stalled | n/a hook — watcher: `RUNNING` + no output change for 600s | same | watcher only |
-| any | crashed | watcher: chrome gone + crash sig in live region or bare shell (`looks_crashed`) | same | watcher only |
+| running | stalled *(no progress)* | n/a hook — watcher: `RUNNING` + no output change for 600s | same | watcher only |
+| any | stalled *(crashed to shell)* | watcher: chrome gone + crash sig in live region or bare shell (`looks_crashed`) | same | watcher only |
+| running | stalled *(dead turn)* | watcher: `API Error:` in live region, turn ended (`looks_errored`) — Claude only | n/a | watcher only |
 | any | removed | `SessionEnd` → `agentq clear` | **fish wrapper** runs `agentq clear` on `codex` exit (no SessionEnd hook) — `codex-clear.fish` | hook / shell shim |
 
 ## The "waiting for approval" stuck-after-approving-in-the-pane gap

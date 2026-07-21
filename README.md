@@ -5,14 +5,20 @@ A persistent, live-updating tmux dashboard for triaging AI coding agents
 
 ## What it does
 
-- **Fleet visibility** — shows all registered agents with type, status, location, age, and message
-- **Priority sorting** — attention-states (CRASHED, WAITING) float to the top
+- **Agent visibility** — shows all registered agents with type, status, location, age, and message
+- **Priority sorting** — attention-states (STALLED, WAITING) float to the top
 - **Live updates** — polls tmux state every ~500ms, no manual refresh needed
 - **Act in place** — approve (`y`), deny (`n`), or free-text reply (`r`) without leaving the dashboard
 - **Exact-pane warp** — `Enter` jumps to the agent's precise tmux pane; `prefix+i` returns
 - **Persistent** — runs in its own tmux session, survives navigation, always current
 
-## Quick start
+## Requirements
+
+- Rust 1.70+
+- tmux 3.2+ (for pane user-options)
+- macOS (tested on darwin with fish shell)
+
+## Installation
 
 ```bash
 # Build and install (puts `agentq` in ~/.cargo/bin)
@@ -39,12 +45,20 @@ vars, so the status messages are short static labels.)
 
 ## Usage
 
-```bash
-# Open the dashboard (or toggle back if already viewing it)
-# Bound to: prefix + i
-agentq open
+## Subcommands
 
-# Inside the dashboard:
+| Command                        | Description                                      |
+| ------------------------------ | ------------------------------------------------ |
+| `agentq status <STATUS> [msg]` | Hook target — tags the current pane with status  |
+| `agentq tui`                   | Launch the persistent TUI dashboard              |
+| `agentq open`                  | Summon/toggle the dashboard (bind to `prefix+i`) |
+| `agentq watch`                 | Crash/stall detection loop (Phase 2)             |
+
+## Dashboard
+
+Inside the dashboard:
+
+```bash
 #   j/k or arrows  — navigate agents
 #   y              — approve (sends y⏎ to agent)
 #   n              — deny (sends n⏎ to agent)
@@ -53,12 +67,16 @@ agentq open
 #   x              — clear the selected agent from the dashboard (stale rows)
 #   d              — toggle the live session preview (bottom half, on by default)
 #   q              — return to previous pane
-
-# Manually set agent status (used by hooks, not typically called directly)
-agentq status WAITING "permission requested"
-agentq status RUNNING "working on task"
-agentq status IDLE "finished"
 ```
+
+## Agent states (priority order, highest first)
+
+| State   | Tier | Color  | Meaning                                     |
+| ------- | ---- | ------ | ------------------------------------------- |
+| STALLED | 0    | Red    | Stopped making progress: crashed to a shell, dead turn, or no output past threshold |
+| WAITING | 1    | Yellow | Blocked on a prompt (y/n or free-text)      |
+| RUNNING | 2    | Green  | Actively working                            |
+| IDLE    | 3    | Gray   | Finished, awaiting next prompt              |
 
 ## Architecture
 
@@ -66,7 +84,7 @@ agentq status IDLE "finished"
 Agent pane (hook fires)     →  agentq status  →  tmux pane user-options (@agent_*)
                                                          ↑
 Dashboard (agentq tui)     ←  tmux list-panes (poll)  ───┘
-                                                         
+
 prefix+i  →  agentq open  →  toggle between work and dashboard session
 ```
 
@@ -81,45 +99,6 @@ the pane when an interactive `codex` exits; (3) you press `x` in the dashboard t
 manually. The `watch` crash detector is the backstop for hard kills. A still-live agent that
 gets cleared re-registers on its next hook.
 
-## Subcommands
+## Related resources
 
-| Command | Description |
-|---------|-------------|
-| `agentq status <STATUS> [msg]` | Hook target — tags the current pane with status |
-| `agentq tui` | Launch the persistent TUI dashboard |
-| `agentq open` | Summon/toggle the dashboard (bind to `prefix+i`) |
-| `agentq watch` | Crash/stall detection loop (Phase 2) |
-
-## Agent states (priority order, highest first)
-
-| State | Tier | Color | Meaning |
-|-------|------|-------|---------|
-| CRASHED | 0 | Red | Agent died to bare shell |
-| STALLED | 0 | Red | No progress past threshold |
-| WAITING | 1 | Yellow | Blocked on a prompt (y/n or free-text) |
-| RUNNING | 2 | Green | Actively working |
-| IDLE | 3 | Gray | Finished, awaiting next prompt |
-
-## Project structure
-
-```
-├── Cargo.toml
-├── src/
-│   ├── main.rs          # CLI dispatch (clap)
-│   ├── model.rs         # Status enum, Agent struct, priority ordering
-│   ├── tmux.rs          # All tmux interaction (the only module that shells out)
-│   ├── status.rs        # `agentq status` — hook target (fast path)
-│   ├── tui.rs           # ratatui dashboard — the main UI
-│   ├── open.rs          # `agentq open` — summon/toggle logic
-│   └── watch.rs         # `agentq watch` — crash/stall detection (Phase 2)
-├── settings/            # Hook configuration snippets
-├── tmux/                # tmux keybinding config
-├── launchd/             # macOS launchd plist (Phase 2)
-└── README.md
-```
-
-## Requirements
-
-- Rust 1.70+
-- tmux 3.2+ (for pane user-options)
-- macOS (tested on darwin with fish shell)
+- https://code.claude.com/docs/en/agent-view

@@ -178,8 +178,11 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
     obs.retain(|k, _| live.contains(k.as_str()));
 
     for agent in &agents {
-        // Leave already-crashed panes alone — no churn.
-        if agent.status == Status::Crashed {
+        // Leave already-stalled panes alone — no churn. STALLED is the single
+        // attention-state for "stopped making progress"; it covers a crash to a
+        // bare shell, a dead turn, and a silent hang alike (the `message` says
+        // which). It clears only when a hook writes a fresh status.
+        if agent.status == Status::Stalled {
             continue;
         }
 
@@ -187,10 +190,10 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
 
         if looks_crashed(&tail) {
             log(&format!(
-                "CRASHED {} ({}, {}) — dropped to shell",
+                "STALLED {} ({}, {}) — dropped to shell",
                 agent.pane_id, agent.agent_type, agent.location
             ));
-            let _ = set(agent, Status::Crashed, "dropped to shell", now);
+            let _ = set(agent, Status::Stalled, "dropped to shell", now);
             obs.remove(&agent.pane_id);
             continue;
         }
@@ -199,17 +202,17 @@ fn scan_once(obs: &mut HashMap<String, Obs>) {
         // shell/stack trace) but the turn died with no `Stop` hook, and the
         // `✻ Cooked for …` footer keeps the tail ticking so the stall check never
         // fires either — the pane would otherwise sit stuck at RUNNING. Detect it
-        // directly and treat it as CRASHED (needs attention); a re-prompt fires
+        // directly and treat it as STALLED (needs attention); a re-prompt fires
         // UserPromptSubmit → RUNNING and recovers it. Claude-only.
         if agent.status == Status::Running
             && agent.agent_type == "claude"
             && looks_errored(&tail)
         {
             log(&format!(
-                "CRASHED {} ({}, {}) — api error",
+                "STALLED {} ({}, {}) — api error",
                 agent.pane_id, agent.agent_type, agent.location
             ));
-            let _ = set(agent, Status::Crashed, "api error", now);
+            let _ = set(agent, Status::Stalled, "api error", now);
             obs.remove(&agent.pane_id);
             continue;
         }

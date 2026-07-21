@@ -37,7 +37,6 @@ pub fn humanize_age(secs: u64) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
-    Crashed,
     Stalled,
     Waiting,
     Running,
@@ -47,7 +46,6 @@ pub enum Status {
 impl fmt::Display for Status {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {
-            Status::Crashed => "CRASHED",
             Status::Stalled => "STALLED",
             Status::Waiting => "WAITING",
             Status::Running => "RUNNING",
@@ -62,7 +60,6 @@ impl FromStr for Status {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_ascii_uppercase().as_str() {
-            "CRASHED" => Ok(Status::Crashed),
             "STALLED" => Ok(Status::Stalled),
             "WAITING" => Ok(Status::Waiting),
             "RUNNING" => Ok(Status::Running),
@@ -76,7 +73,7 @@ impl Status {
     /// Priority tier — lower means more urgent.
     pub fn tier(&self) -> u8 {
         match self {
-            Status::Crashed | Status::Stalled => 0,
+            Status::Stalled => 0,
             Status::Waiting => 1,
             Status::Running => 2,
             Status::Idle => 3,
@@ -87,7 +84,6 @@ impl Status {
     /// stays the canonical SCREAMING form used for storage and parsing.
     pub fn label(&self) -> &'static str {
         match self {
-            Status::Crashed => "Crashed",
             Status::Stalled => "Stalled",
             Status::Waiting => "Waiting",
             Status::Running => "Running",
@@ -97,16 +93,13 @@ impl Status {
 
     /// Returns true for statuses that need human attention.
     pub fn is_attention(&self) -> bool {
-        matches!(
-            self,
-            Status::Crashed | Status::Stalled | Status::Waiting
-        )
+        matches!(self, Status::Stalled | Status::Waiting)
     }
 
     /// TUI color for this status.
     pub fn color(&self) -> Color {
         match self {
-            Status::Crashed | Status::Stalled => Color::Red,
+            Status::Stalled => Color::Red,
             Status::Waiting => Color::Yellow,
             Status::Running => Color::Green,
             Status::Idle => Color::DarkGray,
@@ -265,15 +258,10 @@ mod tests {
             agent("%run", Status::Running, 1),
             agent("%wa", Status::Waiting, 1),
             agent("%stall", Status::Stalled, 1),
-            agent("%crash", Status::Crashed, 1),
         ];
         v.sort();
         let order: Vec<&str> = v.iter().map(|a| a.pane_id.as_str()).collect();
-        // CRASHED/STALLED share tier 0 (stable order between them is fine).
-        assert_eq!(order[2], "%wa");
-        assert_eq!(order[3], "%run");
-        assert_eq!(order[4], "%idle");
-        assert!(v[0].status.tier() == 0 && v[1].status.tier() == 0);
+        assert_eq!(order, ["%stall", "%wa", "%run", "%idle"]);
     }
 
     #[test]
